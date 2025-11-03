@@ -1,19 +1,29 @@
 /* QuizModal, SelectorModal, NoteViewerModal, FolderViewerModal */
 .modal-qg {
 	width: 40%;
-	height: 80%;
+	max-height: 66.67vh;
+	height: 66.67vh;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
 }
 
 /* QuizModal, SelectorModal, NoteViewerModal, FolderViewerModal */
 .modal-title-qg {
 	display: flex;
 	justify-content: center;
+	flex-shrink: 0;
+	padding: 0.5em 0;
 }
 
 /* SelectorModal, FolderViewerModal */
 .modal-content-qg {
 	position: relative;
-	height: 90%;
+	display: flex;
+	flex-direction: column;
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow: hidden;
 }
 
 /* QuizModal */
@@ -24,19 +34,311 @@
 
 /* SelectorModal, FolderViewerModal */
 .item-container-qg {
-	height: 90%;
+	flex: 1 1 auto;
+	min-height: 100px;
 	border: 0.125em solid;
 	border-radius: 0.5em;
 	overflow-y: auto;
+	overflow-x: hidden;
+	position: relative;
+}
+
+/* Search container */
+.search-container-qg {
+	margin: 0.25em 0;
+	padding: 0.5em;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 0.25em;
+	background-color: var(--background-secondary);
+	flex-shrink: 0;
+}
+
+/* Search input group - contains input and inline buttons */
+.search-input-group-qg {
+	display: flex;
+	align-items: center;
+	gap: 0;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 0.25em;
+	background-color: var(--background-primary);
+	overflow: hidden;
+	padding-left: 4px;
+}
+
+/* Wrapper for search input with clear button */
+.search-input-wrapper-qg {
+	position: relative;
+	flex: 1;
+	display: flex;
+	align-items: center;
+}
+
+.search-input-qg {
+	flex: 1;
+	border: none;
+	background: transparent;
+	font-size: 1em;
+	outline: none;
+	color: var(--text-normal);
+	padding: 0.5em 2.5em 0.5em 0.75em; /* Added right padding for clear button */
+	min-width: 0;
+	width: 100%;
+}
+
+.search-input-qg::placeholder {
+	color: var(--text-muted);
+}
+
+/* Clear button inside search input */
+.search-clear-btn-qg {
+	position: absolute;
+	right: 0.5em;
+	color: var(--text-accent);
+	font-size: 1.5em;
+	line-height: 1;
+	cursor: pointer;
+	text-decoration: none;
+	padding: 0 0.25em;
+	user-select: none;
+}
+
+.search-clear-btn-qg:hover {
+	color: var(--text-accent-hover);
+}
+
+/* Inline buttons container */
+.search-input-buttons-qg {
+	display: flex;
+	gap: 4px;
+	align-items: center;
+	padding: 4px;
+}
+
+/* Inline buttons */
+.search-inline-btn-qg {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0.4em 0.5em;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+	background-color: var(--background-secondary);
+	color: var(--text-muted);
+	cursor: pointer;
+	transition: all 0.15s ease;
+	white-space: nowrap;
+	min-width: 32px;
+}
+
+.search-inline-btn-qg:hover {
+	background-color: var(--background-modifier-hover);
+	color: var(--text-accent);
+	border-color: var(--text-accent);
+}
+
+.search-inline-btn-qg svg {
+	width: 16px;
+	height: 16px;
+	stroke-width: 2;
+}
+
+/* Secondary row for dropdown and advanced link */
+.search-secondary-row-qg {
+	display: flex;
+	gap: 0.5em;
+	align-items: center;
+	margin-top: 0.5em;
+}
+
+/* Advanced toggle link */
+.advanced-toggle-link-qg {
+	font-size: 0.8em;
+	color: var(--text-accent);
+	cursor: pointer;
+	text-decoration: none;
+	transition: opacity 0.2s ease;
+}
+
+.advanced-toggle-link-qg:hover {
+	opacity: 0.8;
+	text-decoration: underline;
+}
+
+.bookmark-btn-qg,
+.reset-filters-btn-qg {
+	padding: 0.35em 0.75em;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 0.25em;
+	background-color: var(--background-primary);
+	color: var(--text-normal);
+	cursor: pointer;
+	font-size: 0.85em;
+	transition: background-color 0.2s ease;
+	white-space: nowrap;
+}
+
+.bookmark-btn-qg:hover,
+.reset-filters-btn-qg:hover {
+	background-color: var(--background-modifier-hover);
+}
+
+.load-search-select-qg {
+	padding: 0.35em 0.5em;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 0.25em;
+	background-color: var(--background-primary);
+	color: var(--text-normal);
+	cursor: pointer;
+	font-size: 0.85em;
+	flex: 1;
+	max-width: 200px;
+}
+
+/* Advanced filters */
+.advanced-filters-qg {
+	margin-top: 0.5em;
+	padding-top: 0.5em;
+	border-top: 1px solid var(--background-modifier-border);
+	flex-shrink: 0;
+}
+
+.filter-group-compact-qg {
+	display: flex;
+	flex-direction: column;
+	gap: 0.5em;
+}
+
+.filter-row-compact-qg {
+	display: flex;
+	align-items: center;
+	gap: 0.5em;
+}
+
+.filter-label-compact-qg {
+	min-width: 80px;
+	font-size: 0.9em;
+	color: var(--text-normal);
+}
+
+.filter-input-compact-qg,
+.filter-select-compact-qg {
+	flex: 1;
+	padding: 0.35em 0.5em;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 0.25em;
+	background-color: var(--background-primary);
+	font-size: 0.9em;
+	color: var(--text-normal);
+}
+
+.filter-select-compact-qg {
+	cursor: pointer;
+}
+
+.filter-checkbox-compact-qg {
+	margin-right: 0.5em;
+	cursor: pointer;
+}
+
+.filter-checkbox-compact-qg:disabled {
+	cursor: not-allowed;
+	opacity: 0.5;
+}
+
+.filter-checkbox-label-qg {
+	font-size: 0.9em;
+	color: var(--text-normal);
+	cursor: pointer;
+}
+
+.filter-checkbox-compact-qg:disabled + .filter-checkbox-label-qg {
+	color: var(--text-muted);
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+/* Search results section */
+.search-results-section-qg {
+	padding: 0.35em;
+}
+
+.search-results-header-qg {
+	padding: 0.5em 0.75em;
+	margin-bottom: 0.5em;
+	font-size: 0.85em;
+	color: var(--text-muted);
+	font-style: italic;
+	text-align: center;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.search-result-item-qg {
+	padding: 0.5em;
+	margin: 0.25em 0;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 0.25em;
+	cursor: pointer;
+	transition: background-color 0.2s ease;
+}
+
+.search-result-item-qg:hover {
+	background-color: var(--background-modifier-hover);
+	border-color: var(--text-accent);
+}
+
+.search-result-name-qg {
+	font-weight: var(--font-medium);
+	color: var(--text-normal);
+	margin-bottom: 0.15em;
+	font-size: 0.95em;
+}
+
+.search-result-path-qg {
+	font-size: 0.8em;
+	color: var(--text-muted);
+	font-family: var(--font-monospace);
+}
+
+/* Divider between search results and selected files */
+.selection-divider-qg {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 0.35em;
+	margin: 0.35em 0;
+	border-top: 2px solid var(--background-modifier-border);
+	border-bottom: 1px solid var(--background-modifier-border);
+	background-color: var(--background-secondary);
+	font-weight: var(--font-semibold);
+	font-size: 0.85em;
+	color: var(--text-muted);
+}
+
+.selection-action-link-qg {
+	color: var(--text-accent);
+	cursor: pointer;
+	text-decoration: none;
+	font-size: 0.9em;
+	font-weight: var(--font-normal);
+}
+
+.selection-action-link-qg:hover {
+	text-decoration: underline;
+}
+
+/* Selected files section */
+.selected-files-section-qg {
+	padding: 0.35em;
 }
 
 /* SelectorModal, FolderViewerModal */
 .item-qg {
 	display: flex;
-	padding: 0.5rem;
-	margin: 0.5em;
+	padding: 0.35em 0.5em;
+	margin: 0.25em 0.35em;
 	border: 0.1rem solid;
-	border-radius: 0.5rem;
+	border-radius: 0.25rem;
+	font-size: 0.95em;
 }
 
 /* SelectorModal, FolderViewerModal */
@@ -64,7 +366,10 @@
 .modal-button-container-qg {
 	display: flex;
 	justify-content: center;
-	gap: 1rem;
+	gap: 0.6rem;
+	margin: 0.25em 0;
+	padding: 0.25em 0;
+	flex-shrink: 0;
 }
 
 /* SelectorModal, ModalButton */
@@ -99,7 +404,21 @@
 .prompt-tokens-qg {
 	display: flex;
 	justify-content: center;
-	margin: 0.5em;
+	align-items: center;
+	margin: 0.2em 0;
+	font-size: 0.85em;
+	flex-shrink: 0;
+}
+
+.note-count-clickable-qg {
+	color: var(--text-accent);
+	cursor: pointer;
+	transition: opacity 0.2s ease;
+}
+
+.note-count-clickable-qg:hover {
+	opacity: 0.7;
+	text-decoration: underline;
 }
 
 /* QuizModal */
@@ -324,4 +643,459 @@ FillInTheBlankQuestion, MatchingQuestion, ShortOrLongAnswerQuestion */
 .first-item-qg {
 	padding-top: 0.75em !important;
 	border-top: 1px solid var(--background-modifier-border) !important;
+}
+
+/* FilterBuilderModal - uses same layout as other modals */
+
+.filters-container-qg {
+	margin: 1em 0;
+}
+
+.filter-group-qg {
+	padding: 1em;
+	margin: 1em 0;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 0.5em;
+	background-color: var(--background-secondary);
+}
+
+.filter-group-header-qg {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 0.5em;
+}
+
+.filter-item-qg {
+	padding: 0.75em;
+	margin: 0.5em 0;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 0.25em;
+	background-color: var(--background-primary);
+}
+
+.filter-item-header-qg {
+	display: flex;
+	align-items: center;
+	gap: 0.5em;
+	margin-bottom: 0.5em;
+}
+
+.filter-negate-toggle-qg {
+	padding: 0.25em 0.5em;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 0.25em;
+	background-color: var(--background-secondary);
+	color: var(--text-muted);
+	font-size: 0.75em;
+	font-weight: var(--font-semibold);
+	cursor: pointer;
+	transition: all 0.2s ease;
+	min-width: 40px;
+	text-align: center;
+}
+
+.filter-negate-toggle-qg:hover {
+	border-color: var(--text-accent);
+	background-color: var(--background-modifier-hover);
+}
+
+.filter-negate-toggle-qg.active {
+	background-color: var(--interactive-accent);
+	color: var(--text-on-accent);
+	border-color: var(--interactive-accent);
+}
+
+.filter-type-label-qg {
+	font-weight: var(--font-semibold);
+	color: var(--text-accent);
+	flex-grow: 1;
+}
+
+.filter-remove-button-qg {
+	background: transparent;
+	border: none;
+	font-size: 1.5em;
+	line-height: 1;
+	cursor: pointer;
+	color: var(--text-muted);
+	padding: 0 0.5em;
+	margin-left: auto;
+}
+
+.filter-remove-button-qg:hover {
+	color: var(--color-red);
+}
+
+.filter-item-content-qg {
+	margin-top: 0.5em;
+}
+
+.add-filter-inline-qg {
+	padding: 1em;
+	margin: 0.5em 0;
+	border: 2px dashed var(--background-modifier-border);
+	border-radius: 0.25em;
+	background-color: var(--background-primary);
+}
+
+.add-filter-inline-qg .setting-item {
+	border: none;
+	padding: 0;
+}
+
+.compact-filter-setting-qg {
+	padding: 0.5em 0 !important;
+	border: none !important;
+}
+
+.compact-filter-setting-qg .setting-item-name {
+	min-width: 80px;
+	font-size: 0.9em;
+}
+
+.compact-filter-setting-qg .setting-item-control {
+	display: flex;
+	gap: 0.5em;
+	align-items: center;
+	flex-wrap: wrap;
+}
+
+.inline-filter-setting-qg {
+	display: inline-flex !important;
+	flex-direction: row !important;
+	align-items: center !important;
+	padding: 0 !important;
+	border: none !important;
+}
+
+.inline-filter-setting-qg .setting-item-info {
+	display: none;
+}
+
+.filter-row-qg {
+	display: flex;
+	align-items: center;
+	gap: 0.5em;
+	flex-wrap: wrap;
+}
+
+.toggle-label-qg {
+	margin-left: 0.5em;
+	font-size: 0.9em;
+	color: var(--text-muted);
+}
+
+.no-filters-message-qg {
+	padding: 2em;
+	text-align: center;
+	color: var(--text-muted);
+}
+
+.match-count-container-qg {
+	display: flex;
+	justify-content: center;
+	margin: 1em 0;
+}
+
+.match-count-qg {
+	padding: 0.5em 1em;
+	border-radius: 0.25em;
+	background-color: var(--background-modifier-border);
+	color: var(--text-normal);
+	font-weight: var(--font-semibold);
+	font-size: 1.1em;
+	transition: background-color 0.2s ease;
+}
+
+.clickable-match-count-qg {
+	cursor: pointer;
+}
+
+.clickable-match-count-qg:hover {
+	background-color: var(--background-modifier-border-hover);
+}
+
+.bookmark-section-qg {
+	margin: 1.5em 0;
+	padding: 1em;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 0.5em;
+	background-color: var(--background-secondary);
+}
+
+/* SelectorModal auto-tagging */
+.auto-tag-container-qg {
+	margin: 0.25em 0;
+	padding: 0.4em 0.5em;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 0.25em;
+	background-color: var(--background-secondary);
+	display: flex;
+	flex-direction: column;
+	gap: 0.3em;
+	flex-shrink: 0;
+}
+
+.auto-tag-compact-row-qg {
+	display: flex;
+	align-items: center;
+	gap: 0.4em;
+}
+
+.auto-tag-label-qg {
+	font-size: 0.85em;
+	font-weight: var(--font-medium);
+}
+
+.auto-tag-checkbox-qg {
+	cursor: pointer;
+	width: 14px;
+	height: 14px;
+}
+
+.auto-tag-options-qg {
+	display: flex;
+	gap: 0.4em;
+	align-items: center;
+}
+
+.auto-tag-input-qg {
+	flex: 1;
+	padding: 0.3em 0.45em;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 0.25em;
+	background-color: var(--background-primary);
+	font-size: 0.85em;
+}
+
+.auto-tag-select-qg {
+	padding: 0.3em 0.45em;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 0.25em;
+	background-color: var(--background-primary);
+	font-size: 0.85em;
+	cursor: pointer;
+	min-width: 100px;
+}
+
+.compact-setting-qg {
+	padding-top: 0 !important;
+	padding-bottom: 0 !important;
+	border: none !important;
+}
+
+.compact-setting-qg .setting-item-info {
+	flex-grow: 1;
+}
+
+.compact-setting-qg .setting-item-name {
+	font-size: 0.95em;
+}
+
+/* Filter settings */
+.bookmarks-container-qg {
+	margin: 1em 0;
+}
+
+.bookmark-item-qg {
+	padding: 1em;
+	margin: 1em 0;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 0.5em;
+	background-color: var(--background-secondary);
+}
+
+.bookmark-header-qg {
+	margin-bottom: 0.5em;
+}
+
+.bookmark-info-qg {
+	color: var(--text-muted);
+	font-size: 0.9em;
+	margin-bottom: 0.75em;
+}
+
+.bookmark-actions-qg {
+	display: flex;
+	gap: 0.5em;
+	margin-top: 0.75em;
+}
+
+.bookmark-command-info-qg {
+	margin-top: 0.5em;
+	padding: 0.5em;
+	border-radius: 0.25em;
+	background-color: var(--background-primary);
+	font-family: var(--font-monospace);
+}
+
+.no-bookmarks-message-qg {
+	padding: 2em;
+	text-align: center;
+	color: var(--text-muted);
+	font-style: italic;
+}
+
+/* Matching Files Modal */
+.matching-files-modal-qg {
+	width: 500px;
+	max-height: 70%;
+}
+
+.matching-files-content-qg {
+	overflow-y: auto;
+	max-height: 60vh;
+}
+
+.file-list-qg {
+	margin: 0.5em 0;
+}
+
+.file-list-item-qg {
+	padding: 0.75em;
+	margin: 0.5em 0;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 0.25em;
+	cursor: pointer;
+	transition: background-color 0.2s ease;
+}
+
+.file-list-item-qg:hover {
+	background-color: var(--background-modifier-hover);
+	border-color: var(--text-accent);
+}
+
+.file-name-qg {
+	font-weight: var(--font-semibold);
+	color: var(--text-normal);
+	margin-bottom: 0.25em;
+}
+
+.file-path-qg {
+	font-size: 0.85em;
+	color: var(--text-muted);
+	font-family: var(--font-monospace);
+}
+
+.no-matches-qg {
+	padding: 2em;
+	text-align: center;
+	color: var(--text-muted);
+	font-style: italic;
+}
+
+/* Bookmark Manager Modal */
+.bookmark-manager-container {
+	margin: 1em 0;
+	max-height: 60vh;
+	overflow-y: auto;
+}
+
+.bookmark-manager-item {
+	padding: 1em;
+	margin: 0.75em 0;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 0.5em;
+	background-color: var(--background-secondary);
+}
+
+.bookmark-manager-header {
+	margin-bottom: 0.5em;
+	font-size: 1.1em;
+}
+
+.bookmark-manager-info {
+	margin-bottom: 0.75em;
+	color: var(--text-muted);
+	font-size: 0.9em;
+}
+
+.bookmark-manager-actions {
+	display: flex;
+	gap: 0.5em;
+	flex-wrap: wrap;
+}
+
+.bookmark-manager-actions button {
+	padding: 0.4em 0.8em;
+	font-size: 0.9em;
+}
+
+.manage-bookmarks-btn-qg {
+	padding: 0.4em 0.8em;
+	background-color: var(--interactive-normal);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 0.25em;
+	cursor: pointer;
+	font-size: 0.9em;
+	transition: background-color 0.2s ease;
+}
+
+.manage-bookmarks-btn-qg:hover {
+	background-color: var(--interactive-hover);
+}
+
+/* Load Search Modal */
+.load-search-list-qg {
+	margin: 1em 0;
+	max-height: 60vh;
+	overflow-y: auto;
+}
+
+.load-search-item-qg {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 1em;
+	margin: 0.5em 0;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 0.5em;
+	transition: all 0.2s ease;
+}
+
+.load-search-item-qg:hover {
+	background-color: var(--background-modifier-hover);
+	border-color: var(--text-accent);
+}
+
+.load-search-content-qg {
+	flex: 1;
+	cursor: pointer;
+}
+
+.load-search-name-qg {
+	font-weight: var(--font-semibold);
+	font-size: 1.05em;
+	margin-bottom: 0.3em;
+	color: var(--text-normal);
+}
+
+.load-search-info-qg {
+	font-size: 0.85em;
+	color: var(--text-muted);
+}
+
+.load-search-delete-btn-qg {
+	flex-shrink: 0;
+	padding: 0.4em;
+	background: transparent;
+	border: none;
+	cursor: pointer;
+	color: var(--text-muted);
+	border-radius: 4px;
+	transition: all 0.2s ease;
+}
+
+.load-search-delete-btn-qg:hover {
+	background-color: var(--background-modifier-error);
+	color: var(--text-error);
+}
+
+.load-search-empty-qg {
+	padding: 2em;
+	text-align: center;
+	color: var(--text-muted);
+	font-size: 0.95em;
+	line-height: 1.5;
 }

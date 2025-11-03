@@ -13,6 +13,8 @@ interface ShortOrLongAnswerQuestionProps {
 
 const ShortOrLongAnswerQuestion = ({ app, question, settings }: ShortOrLongAnswerQuestionProps) => {
 	const [status, setStatus] = useState<"answering" | "evaluating" | "submitted">("answering");
+	const [similarityPercentage, setSimilarityPercentage] = useState<number | null>(null);
+	const [markedCorrect, setMarkedCorrect] = useState<boolean>(false);
 	const component = useMemo<Component>(() => new Component(), []);
 	const questionRef = useRef<HTMLDivElement>(null);
 	const answerRef = useRef<HTMLButtonElement>(null);
@@ -32,8 +34,11 @@ const ShortOrLongAnswerQuestion = ({ app, question, settings }: ShortOrLongAnswe
 	}, [app, question, component, status]);
 
 	const handleSubmit = async (input: string) => {
-		if (input.toLowerCase().trim() === "skip") {
+		// If empty, mark as incorrect and reveal answer
+		if (!input.trim()) {
 			setStatus("submitted");
+			setSimilarityPercentage(0);
+			new Notice("Incorrect: 0% match");
 			return;
 		}
 
@@ -42,11 +47,12 @@ const ShortOrLongAnswerQuestion = ({ app, question, settings }: ShortOrLongAnswe
 			new Notice("Evaluating answer...");
 			const generator = GeneratorFactory.createInstance(settings);
 			const similarity = await generator.shortOrLongAnswerSimilarity(input.trim(), question.answer);
-			const similarityPercentage = Math.round(similarity * 100);
-			if (similarityPercentage >= 80) {
-				new Notice(`Correct: ${similarityPercentage}% match`);
+			const percentage = Math.round(similarity * 100);
+			setSimilarityPercentage(percentage);
+			if (percentage >= 70) {
+				new Notice(`Correct: ${percentage}% match`);
 			} else {
-				new Notice(`Incorrect: ${similarityPercentage}% match`);
+				new Notice(`Incorrect: ${percentage}% match`);
 			}
 			setStatus("submitted");
 		} catch (error) {
@@ -55,14 +61,34 @@ const ShortOrLongAnswerQuestion = ({ app, question, settings }: ShortOrLongAnswe
 		}
 	};
 
+	const handleMarkCorrect = () => {
+		setMarkedCorrect(true);
+		new Notice("Marked as correct");
+	};
+
+	const isIncorrect = status === "submitted" && similarityPercentage !== null && similarityPercentage < 70;
+	const showOverride = isIncorrect && !markedCorrect;
+
 	return (
 		<div className="question-container-qg">
 			<div className="question-qg" ref={questionRef} />
 			{status === "submitted" && <button className="answer-qg" ref={answerRef} />}
+			{showOverride && (
+				<div className="override-container-qg">
+					<button className="override-button-qg" onClick={handleMarkCorrect}>
+						I was correct
+					</button>
+				</div>
+			)}
+			{markedCorrect && (
+				<div className="override-notice-qg">
+					✓ Marked as correct
+				</div>
+			)}
 			<div className={status === "submitted" ? "input-container-qg" : "input-container-qg limit-height-qg"}>
 				<AnswerInput onSubmit={handleSubmit} clearInputOnSubmit={false} disabled={status !== "answering"} />
 				<div className="instruction-footnote-qg">
-					Press enter to submit your answer. Enter "skip" to reveal the answer.
+					Press enter to submit your answer. Press enter without typing to mark as incorrect and reveal the answer.
 				</div>
 			</div>
 		</div>

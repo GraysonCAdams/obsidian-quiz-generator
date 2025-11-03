@@ -3,6 +3,9 @@ export const cleanUpNoteContents = (noteContents: string, hasFrontMatter: boolea
 	if (hasFrontMatter) {
 		cleanedContents = removeFrontMatter(cleanedContents);
 	}
+	cleanedContents = removeObsidianComments(cleanedContents);
+	cleanedContents = removeTodoItems(cleanedContents);
+	cleanedContents = removeAnecdotalCallouts(cleanedContents);
 	cleanedContents = cleanUpLinks(cleanedContents);
 	cleanedContents = removeMarkdownHeadings(cleanedContents);
 	cleanedContents = removeMarkdownFormatting(cleanedContents);
@@ -12,6 +15,36 @@ export const cleanUpNoteContents = (noteContents: string, hasFrontMatter: boolea
 const removeFrontMatter = (input: string): string => {
 	const yamlFrontMatterRegex = /---[\s\S]+?---\n/;
 	return input.replace(yamlFrontMatterRegex, "");
+};
+
+const removeObsidianComments = (input: string): string => {
+	// Remove Obsidian comments: %%comment%%
+	const commentRegex = /%%[\s\S]*?%%/g;
+	return input.replace(commentRegex, "");
+};
+
+const removeTodoItems = (input: string): string => {
+	// Remove todo list items: - [ ], - [x], - [X], etc.
+	const todoRegex = /^[\s]*[-*+]\s+\[[^\]]*\].*$/gm;
+	return input.replace(todoRegex, "");
+};
+
+const removeAnecdotalCallouts = (input: string): string => {
+	// Remove callouts that are typically anecdotal or non-study material
+	// These callout types are usually personal notes, todos, or side thoughts
+	const anecdotalCallouts = ['todo', 'aside'];
+	let result = input;
+	
+	for (const calloutType of anecdotalCallouts) {
+		// Match callouts with optional +/- and their content until the next heading or callout
+		const calloutRegex = new RegExp(
+			`^>\\s*\\[!${calloutType}\\][+-]?\\s*.*$(?:\\n^>.*$)*`,
+			'gmi'
+		);
+		result = result.replace(calloutRegex, "");
+	}
+	
+	return result;
 };
 
 const cleanUpLinks = (input: string): string => {

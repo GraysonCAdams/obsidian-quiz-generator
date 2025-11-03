@@ -17,8 +17,8 @@ export default abstract class Generator {
 			`"answer": The number corresponding to the index of the correct answer in the options array\n`;
 		const selectAllThatApplyFormat = `"question": The question\n"options": An array of 4 to 26 strings representing the choices\n` +
 			`"answer": An array of numbers corresponding to the indexes of the correct answers in the options array\n`;
-		const fillInTheBlankFormat = `"question": The question with 1 to 10 blanks, which must be represented by \`____\` (backticks included)\n` +
-			`"answer": An array of strings corresponding to the blanks in the question\n`;
+		const fillInTheBlankFormat = `"question": The question with 1 to 10 blanks, which must be represented by \`____\` (backticks included). Use one blank per word.\n` +
+			`"answer": An array of strings corresponding to the blanks in the question, with each string being a single word\n`;
 		const matchingFormat = `"question": The question\n` +
 			`"answer": An array of 3 to 13 objects, each containing a leftOption property (a string that needs to be matched) and a rightOption property (a string that matches the leftOption)\n`;
 		const shortOrLongAnswerFormat = `"question": The question\n"answer": The answer\n`;
@@ -45,9 +45,25 @@ export default abstract class Generator {
 	}
 
 	protected userPrompt(contents: string[]): string {
-		return "Generate " + this.userPromptQuestions() + " about the following text:\n" + contents.join("") +
-			"\n\nIf the above text contains LaTeX, you should use $...$ (inline math mode) for mathematical symbols. " +
+		let prompt = "Generate " + this.userPromptQuestions() + " about the following text";
+		
+		// If multiple sources, organize them and instruct to maintain order
+		if (contents.length > 1) {
+			prompt += "s (organized by subject/topic):\n\n";
+			contents.forEach((content, index) => {
+				prompt += `--- Subject/Topic ${index + 1} ---\n${content}\n\n`;
+			});
+			prompt += "CRITICAL: You MUST generate questions in consecutive groups by subject/topic, maintaining the EXACT order shown above. " +
+				"First generate ALL questions for Subject/Topic 1, then ALL questions for Subject/Topic 2, and so on. " +
+				"DO NOT randomize or interleave questions from different subjects. Questions must be grouped by subject in sequential order.";
+		} else {
+			prompt += ":\n" + contents.join("");
+		}
+		
+		prompt += "\n\nIf the above text contains LaTeX, you should use $...$ (inline math mode) for mathematical symbols. " +
 			"The overall focus should be on assessing understanding and critical thinking.";
+		
+		return prompt;
 	}
 
 	private systemPromptQuestions(): string {
@@ -108,7 +124,7 @@ export default abstract class Generator {
 		const trueFalseExample = `{"question": "HTML is a programming language.", "answer": false}`;
 		const multipleChoiceExample = `{"question": "Which of the following is the correct translation of house in Spanish?", "options": ["Casa", "Maison", "Haus", "Huis"], "answer": 0}`;
 		const selectAllThatApplyExample = `{"question": "Which of the following are elements on the periodic table?", "options": ["Oxygen", "Water", "Hydrogen", "Salt", "Carbon"], "answer": [0, 2, 4]}`;
-		const fillInTheBlankExample = `{"question": "The Battle of \`____\` was fought in \`____\`.", "answer": ["Gettysburg", "1863"]}`;
+		const fillInTheBlankExample = `{"question": "The \`____\` \`____\` was a major conflict fought in \`____\`.", "answer": ["Civil", "War", "1861"]}`;
 		const matchingExample = `{"question": "Match the medical term to its definition.", "answer": [{"leftOption": "Hypertension", "rightOption": "High blood pressure"}, {"leftOption": "Bradycardia", "rightOption": "Slow heart rate"}, {"leftOption": "Tachycardia", "rightOption": "Fast heart rate"}, {"leftOption": "Hypotension", "rightOption": "Low blood pressure"}]}`;
 		const shortAnswerExample = `{"question": "Who was the first President of the United States and what is he commonly known for?", "answer": "George Washington was the first President of the United States and is commonly known for leading the American Revolutionary War and serving two terms as president."}`;
 		const longAnswerExample = `{"question": "Explain the difference between a stock and a bond, and discuss the risks and potential rewards associated with each investment type.", "answer": "A stock represents ownership in a company and a claim on part of its profits. The potential rewards include dividends and capital gains if the company's value increases, but the risks include the possibility of losing the entire investment if the company fails. A bond is a loan made to a company or government, which pays interest over time and returns the principal at maturity. Bonds are generally considered less risky than stocks, as they provide regular interest payments and the return of principal, but they offer lower potential returns."}`;

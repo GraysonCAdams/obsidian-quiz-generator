@@ -574,6 +574,54 @@ FillInTheBlankQuestion, MatchingQuestion, ShortOrLongAnswerQuestion */
 	text-align: center;
 }
 
+/* FillInTheBlankQuestion - Inline inputs */
+.fill-blank-question-qg {
+	text-align: center;
+	font-size: var(--font-text-size);
+	line-height: 2.5;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: center;
+	gap: 0.25em;
+	margin-bottom: 1em;
+}
+
+.fill-blank-text-qg {
+	display: inline;
+}
+
+.fill-blank-input-qg {
+	display: inline-block;
+	min-width: 80px;
+	max-width: 200px;
+	padding: 0.25em 0.5em;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+	background: var(--background-primary);
+	color: var(--text-normal);
+	font-size: var(--font-text-size);
+	text-align: center;
+	outline: none;
+	transition: border-color 0.2s ease;
+}
+
+.fill-blank-input-qg:focus {
+	border-color: var(--interactive-accent);
+}
+
+.fill-blank-input-qg:disabled {
+	opacity: 0.6;
+	cursor: not-allowed;
+}
+
+.fill-blank-revealed-notice-qg {
+	text-align: center;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	margin-bottom: 0.5em;
+}
+
 /* ShortOrLongAnswerQuestion */
 .limit-height-qg {
 	height: 0;
@@ -590,6 +638,38 @@ FillInTheBlankQuestion, MatchingQuestion, ShortOrLongAnswerQuestion */
 	white-space: normal !important;
 	text-align: left;
 	font-size: 1em;
+}
+
+/* ShortOrLongAnswerQuestion - Override button container */
+.override-container-qg {
+	display: flex;
+	justify-content: center;
+	margin: 0.75em 0;
+}
+
+/* ShortOrLongAnswerQuestion - Override button */
+.override-button-qg {
+	padding: 0.5em 1.25em;
+	background-color: var(--interactive-accent);
+	color: var(--text-on-accent);
+	border: none;
+	border-radius: 0.25em;
+	cursor: pointer;
+	font-size: 0.95em;
+	transition: opacity 0.2s ease;
+}
+
+.override-button-qg:hover {
+	opacity: 0.8;
+}
+
+/* ShortOrLongAnswerQuestion - Override notice */
+.override-notice-qg {
+	text-align: center;
+	color: var(--text-success);
+	font-weight: 500;
+	margin: 0.5em 0;
+	font-size: 0.95em;
 }
 
 /* MatchingQuestion */

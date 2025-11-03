@@ -1,7 +1,6 @@
 import { App, Component, MarkdownRenderer, Notice } from "obsidian";
 import { useEffect, useRef, useState } from "react";
 import { FillInTheBlank } from "../../utils/types";
-import AnswerInput from "../components/AnswerInput";
 
 interface FillInTheBlankQuestionProps {
 	app: App;
@@ -9,60 +8,117 @@ interface FillInTheBlankQuestionProps {
 }
 
 const FillInTheBlankQuestion = ({ app, question }: FillInTheBlankQuestionProps) => {
-	const [filledBlanks, setFilledBlanks] = useState<string[]>(Array(question.answer.length).fill(""));
-	const questionRef = useRef<HTMLDivElement>(null);
+	const [inputValues, setInputValues] = useState<string[]>(Array(question.answer.length).fill(""));
+	const [submitted, setSubmitted] = useState<boolean>(false);
+	const [revealedAnswers, setRevealedAnswers] = useState<boolean>(false);
+	const questionContainerRef = useRef<HTMLDivElement>(null);
+	const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
 	useEffect(() => {
-		const generateQuestion = () => {
-			let blankIndex = 0;
-			return question.question.replace(/`_+`/g, match => {
-				if (blankIndex < filledBlanks.length && filledBlanks[blankIndex] === question.answer[blankIndex]) {
-					return filledBlanks[blankIndex++];
-				}
-				blankIndex++;
-				return match;
-			});
-		};
+		if (!questionContainerRef.current) return;
 
-		if (questionRef.current) {
-			questionRef.current.empty();
-			const component = new Component();
+		questionContainerRef.current.empty();
+		inputRefs.current = [];
 
-			generateQuestion().split("\\n").forEach(questionFragment => {
-				if (questionRef.current) {
-					MarkdownRenderer.render(app, questionFragment, questionRef.current, "", component);
+		const container = questionContainerRef.current;
+		let blankIndex = 0;
+
+		// Split by blanks and create elements
+		const parts = question.question.split(/(`_+`)/g);
+		
+		parts.forEach((part) => {
+			if (part.match(/`_+`/)) {
+				// This is a blank - create an input field
+				if (blankIndex < question.answer.length) {
+					const input = container.createEl("input", {
+						cls: "fill-blank-input-qg",
+						type: "text",
+						attr: {
+							placeholder: "____",
+						}
+					});
+
+					if (submitted) {
+						input.disabled = true;
+					}
+
+					const currentIndex = blankIndex;
+					input.value = inputValues[currentIndex];
+
+					// Handle input changes
+					input.addEventListener("input", (e) => {
+						const newValues = [...inputValues];
+						newValues[currentIndex] = (e.target as HTMLInputElement).value;
+						setInputValues(newValues);
+					});
+
+					// Handle Enter key
+					input.addEventListener("keydown", (e) => {
+						if (e.key === "Enter") {
+							e.preventDefault();
+							handleSubmit();
+						}
+					});
+
+					inputRefs.current[currentIndex] = input;
+					blankIndex++;
 				}
-			});
+			} else if (part) {
+				// Regular text - render as markdown
+				const textSpan = container.createEl("span", { cls: "fill-blank-text-qg" });
+				const component = new Component();
+				MarkdownRenderer.render(app, part, textSpan, "", component);
+			}
+		});
+	}, [app, question, inputValues, submitted]);
+
+	const handleSubmit = () => {
+		// Check if all inputs are empty
+		const allEmpty = inputValues.every(val => !val.trim());
+		
+		if (allEmpty) {
+			// Reveal all answers
+			setInputValues(question.answer);
+			setRevealedAnswers(true);
+			setSubmitted(true);
+			new Notice("Answers revealed");
+			return;
 		}
-	}, [app, question, filledBlanks]);
 
-	const handleSubmit = (input: string) => {
-		const normalizedInput = input.toLowerCase().trim();
-		const blankIndex = question.answer.findIndex(
-			(blank, index) => blank.toLowerCase() === normalizedInput && !filledBlanks[index]
-		);
+		// Check answers
+		let allCorrect = true;
+		const newValues = [...inputValues];
+		
+		inputValues.forEach((value, index) => {
+			if (value.trim() && value.toLowerCase().trim() !== question.answer[index].toLowerCase()) {
+				allCorrect = false;
+			}
+			// Fill in correct answer if empty or incorrect
+			if (!value.trim() || value.toLowerCase().trim() !== question.answer[index].toLowerCase()) {
+				newValues[index] = question.answer[index];
+			}
+		});
 
-		if (blankIndex !== -1) {
-			setFilledBlanks(prevFilledBlanks => {
-				const newFilledBlanks = [...prevFilledBlanks];
-				newFilledBlanks[blankIndex] = question.answer[blankIndex];
-				return newFilledBlanks;
-			});
-		} else if (normalizedInput === "skip") {
-			setFilledBlanks(question.answer);
+		setInputValues(newValues);
+		setSubmitted(true);
+
+		if (allCorrect) {
+			new Notice("Correct!");
 		} else {
-			new Notice("Incorrect");
+			new Notice("Incorrect - correct answers shown");
 		}
 	};
 
 	return (
 		<div className="question-container-qg">
-			<div className="question-qg" ref={questionRef} />
-			<div className="input-container-qg">
-				<AnswerInput onSubmit={handleSubmit} disabled={filledBlanks.every(blank => blank.length > 0)} />
-				<div className="instruction-footnote-qg">
-					Press enter to submit your answer to a blank. Enter "skip" to reveal all answers.
+			<div className="fill-blank-question-qg" ref={questionContainerRef} />
+			{submitted && revealedAnswers && (
+				<div className="fill-blank-revealed-notice-qg">
+					Answers were revealed (marked incorrect)
 				</div>
+			)}
+			<div className="instruction-footnote-qg">
+				Fill in the blanks and press enter in any field to submit. Press enter without typing to reveal all answers.
 			</div>
 		</div>
 	);

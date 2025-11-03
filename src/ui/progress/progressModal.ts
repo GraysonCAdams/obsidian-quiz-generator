@@ -4,7 +4,7 @@ export default class ProgressModal extends Modal {
 	private progressBar!: HTMLDivElement;
 	private statusText!: HTMLDivElement;
 	private currentStep: number = 0;
-	private totalSteps: number = 4;
+	private totalSteps: number = 5;
 
 	constructor(app: App) {
 		super(app);

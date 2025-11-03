@@ -167,16 +167,6 @@ export default class SelectorModal extends Modal {
 				// Step 1: Preparing content
 				progressModal.updateProgress(1, "Preparing content...");
 				
-				// Remove filtered tags if enabled
-				if (this.removeFilteredTags && this.filteredTagsToRemove.size > 0) {
-					await this.removeTagsFromNotes();
-				}
-				
-				// Apply auto-tags if enabled
-				if (this.autoTagEnabled && this.autoTags.trim()) {
-					await this.applyAutoTags();
-				}
-
 				// Step 2: Sending to LLM
 				progressModal.updateProgress(2, `Sending to ${this.settings.provider}...`);
 				const generator = GeneratorFactory.createInstance(this.settings);
@@ -216,6 +206,19 @@ export default class SelectorModal extends Modal {
 						new Notice("A question was generated incorrectly");
 					}
 				});
+
+				// Step 5: Applying tag manipulations (AFTER successful generation)
+				progressModal.updateProgress(5, "Updating note tags...");
+				
+				// Remove filtered tags if enabled
+				if (this.removeFilteredTags && this.filteredTagsToRemove.size > 0) {
+					await this.removeTagsFromNotes();
+				}
+				
+				// Apply auto-tags if enabled
+				if (this.autoTagEnabled && this.autoTags.trim()) {
+					await this.applyAutoTags();
+				}
 
 				// Complete progress
 				progressModal.complete();

@@ -18,6 +18,7 @@ import { cleanUpNoteContents } from "../../utils/markdownCleaner";
 import { countNoteTokens, setIconAndTooltip } from "../../utils/helpers";
 import { Provider } from "../../generators/providers";
 import FilterBuilderModal from "../filter/filterBuilderModal";
+import ProgressModal from "../progress/progressModal";
 import type QuizGenerator from "../../main";
 
 const enum SelectorModalButton {
@@ -158,7 +159,14 @@ export default class SelectorModal extends Modal {
 
 			this.toggleButtons([SelectorModalButton.GENERATE], true);
 
+			// Create and open progress modal
+			const progressModal = new ProgressModal(this.app);
+			progressModal.open();
+
 			try {
+				// Step 1: Preparing content
+				progressModal.updateProgress(1, "Preparing content...");
+				
 				// Remove filtered tags if enabled
 				if (this.removeFilteredTags && this.filteredTagsToRemove.size > 0) {
 					await this.removeTagsFromNotes();
@@ -169,15 +177,23 @@ export default class SelectorModal extends Modal {
 					await this.applyAutoTags();
 				}
 
-				new Notice("Generating...");
+				// Step 2: Sending to LLM
+				progressModal.updateProgress(2, `Sending to ${this.settings.provider}...`);
 				const generator = GeneratorFactory.createInstance(this.settings);
+				
+				// Step 3: Waiting for response
+				progressModal.updateProgress(3, "Waiting for response...");
 				const generatedQuestions = await generator.generateQuiz([...this.selectedNotes.values()]);
+				
 				if (generatedQuestions === null) {
+					progressModal.error("Error: Generation returned nothing");
+					setTimeout(() => progressModal.close(), 2000);
 					this.toggleButtons([SelectorModalButton.GENERATE], false);
-					new Notice("Error: Generation returned nothing");
 					return;
 				}
 
+				// Step 4: Processing questions
+				progressModal.updateProgress(4, "Processing questions...");
 				const quiz: Quiz = JSON.parse(generatedQuestions.replace(/\\+/g, "\\\\"));
 				const questions: Question[] = [];
 				quiz.questions.forEach(question => {
@@ -201,10 +217,15 @@ export default class SelectorModal extends Modal {
 					}
 				});
 
+				// Complete progress
+				progressModal.complete();
+
 				this.quiz = new QuizModalLogic(this.app, this.settings, questions, [...this.selectedNoteFiles.values()].flat());
 				await this.quiz.renderQuiz();
 				this.toggleButtons([SelectorModalButton.QUIZ], false);
 			} catch (error) {
+				progressModal.error((error as Error).message);
+				setTimeout(() => progressModal.close(), 2000);
 				new Notice((error as Error).message, 0);
 			} finally {
 				this.toggleButtons([SelectorModalButton.GENERATE], false);

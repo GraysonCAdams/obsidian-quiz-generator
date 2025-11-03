@@ -35,6 +35,6 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralConfig = {
 	showNotePath: false,
 	showFolderPath: false,
 	includeSubfolderNotes: true,
-	randomizeQuestions: true,
+	randomizeQuestions: false,
 	language: "English",
 };

@@ -8,11 +8,11 @@ interface FillInTheBlankQuestionProps {
 }
 
 const FillInTheBlankQuestion = ({ app, question }: FillInTheBlankQuestionProps) => {
-	const [inputValues, setInputValues] = useState<string[]>(Array(question.answer.length).fill(""));
 	const [submitted, setSubmitted] = useState<boolean>(false);
 	const [revealedAnswers, setRevealedAnswers] = useState<boolean>(false);
 	const questionContainerRef = useRef<HTMLDivElement>(null);
 	const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
+	const inputValuesRef = useRef<string[]>(Array(question.answer.length).fill(""));
 
 	useEffect(() => {
 		if (!questionContainerRef.current) return;
@@ -43,13 +43,11 @@ const FillInTheBlankQuestion = ({ app, question }: FillInTheBlankQuestionProps) 
 					}
 
 					const currentIndex = blankIndex;
-					input.value = inputValues[currentIndex];
+					input.value = inputValuesRef.current[currentIndex];
 
 					// Handle input changes
 					input.addEventListener("input", (e) => {
-						const newValues = [...inputValues];
-						newValues[currentIndex] = (e.target as HTMLInputElement).value;
-						setInputValues(newValues);
+						inputValuesRef.current[currentIndex] = (e.target as HTMLInputElement).value;
 					});
 
 					// Handle Enter key
@@ -70,15 +68,23 @@ const FillInTheBlankQuestion = ({ app, question }: FillInTheBlankQuestionProps) 
 				MarkdownRenderer.render(app, part, textSpan, "", component);
 			}
 		});
-	}, [app, question, inputValues, submitted]);
+	}, [app, question, submitted]);
 
 	const handleSubmit = () => {
+		const currentValues = inputValuesRef.current;
+		
 		// Check if all inputs are empty
-		const allEmpty = inputValues.every(val => !val.trim());
+		const allEmpty = currentValues.every(val => !val.trim());
 		
 		if (allEmpty) {
 			// Reveal all answers
-			setInputValues(question.answer);
+			inputValuesRef.current = [...question.answer];
+			// Update all input fields
+			inputRefs.current.forEach((input, index) => {
+				if (input) {
+					input.value = question.answer[index];
+				}
+			});
 			setRevealedAnswers(true);
 			setSubmitted(true);
 			new Notice("Answers revealed");
@@ -87,19 +93,20 @@ const FillInTheBlankQuestion = ({ app, question }: FillInTheBlankQuestionProps) 
 
 		// Check answers
 		let allCorrect = true;
-		const newValues = [...inputValues];
 		
-		inputValues.forEach((value, index) => {
+		currentValues.forEach((value, index) => {
 			if (value.trim() && value.toLowerCase().trim() !== question.answer[index].toLowerCase()) {
 				allCorrect = false;
 			}
 			// Fill in correct answer if empty or incorrect
 			if (!value.trim() || value.toLowerCase().trim() !== question.answer[index].toLowerCase()) {
-				newValues[index] = question.answer[index];
+				inputValuesRef.current[index] = question.answer[index];
+				if (inputRefs.current[index]) {
+					inputRefs.current[index]!.value = question.answer[index];
+				}
 			}
 		});
 
-		setInputValues(newValues);
 		setSubmitted(true);
 
 		if (allCorrect) {

@@ -92,18 +92,24 @@
 /* Clear button inside search input */
 .search-clear-btn-qg {
 	position: absolute;
-	right: 0.5em;
-	color: var(--text-accent);
-	font-size: 1.5em;
+	right: 0.25em;
+	top: 50%;
+	transform: translateY(-50%);
+	color: var(--text-muted);
+	font-size: 1.2em;
 	line-height: 1;
 	cursor: pointer;
 	text-decoration: none;
 	padding: 0 0.25em;
 	user-select: none;
+	display: flex;
+	align-items: center;
+	justify-content: center;
 }
 
 .search-clear-btn-qg:hover {
-	color: var(--text-accent-hover);
+	color: var(--text-normal);
+	text-decoration: none;
 }
 
 /* Inline buttons container */

@@ -150,6 +150,12 @@ export default class SelectorModal extends Modal {
 				return;
 			}
 
+			// Validate API key BEFORE making any file modifications
+			if (!this.hasValidAPIKey()) {
+				new Notice("Please provide a valid API key in settings for the selected provider");
+				return;
+			}
+
 			this.toggleButtons([SelectorModalButton.GENERATE], true);
 
 			try {
@@ -767,6 +773,33 @@ export default class SelectorModal extends Modal {
 			this.promptTokens > 0;
 	}
 
+	private hasValidAPIKey(): boolean {
+		const provider = this.settings.provider;
+		
+		// Ollama doesn't require an API key (local)
+		if (provider === Provider.OLLAMA) {
+			return true;
+		}
+		
+		// Check for API key based on provider
+		switch (provider) {
+			case Provider.OPENAI:
+				return !!(this.settings as any).openAIApiKey?.trim();
+			case Provider.GOOGLE:
+				return !!(this.settings as any).googleApiKey?.trim();
+			case Provider.ANTHROPIC:
+				return !!(this.settings as any).anthropicApiKey?.trim();
+			case Provider.PERPLEXITY:
+				return !!(this.settings as any).perplexityApiKey?.trim();
+			case Provider.MISTRAL:
+				return !!(this.settings as any).mistralApiKey?.trim();
+			case Provider.COHERE:
+				return !!(this.settings as any).cohereApiKey?.trim();
+			default:
+				return false;
+		}
+	}
+
 	private renderAutoTagUI(): void {
 		// Clear existing container if it exists
 		if (this.autoTagContainer) {
@@ -1147,10 +1180,23 @@ export default class SelectorModal extends Modal {
 			}
 		}
 
-		// Remove inline tags from content
+		// Remove inline tags from content (preserving line breaks)
 		for (const tag of tags) {
-			const tagPattern = new RegExp(`\\s*${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*`, 'g');
-			const newContent = content.replace(tagPattern, ' ');
+			// Match only spaces and tabs around the tag, not newlines
+			const tagPattern = new RegExp(`[ \\t]*${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[ \\t]*`, 'g');
+			const newContent = content.replace(tagPattern, (match, offset) => {
+				// Check if tag is on its own line
+				const beforeChar = offset > 0 ? content[offset - 1] : '\n';
+				const afterPos = offset + match.length;
+				const afterChar = afterPos < content.length ? content[afterPos] : '\n';
+				
+				// If surrounded by newlines or at start/end, remove completely
+				if ((beforeChar === '\n' || offset === 0) && (afterChar === '\n' || afterPos >= content.length)) {
+					return '';
+				}
+				// Otherwise replace with a single space
+				return ' ';
+			});
 			if (newContent !== content) {
 				content = newContent;
 				modified = true;

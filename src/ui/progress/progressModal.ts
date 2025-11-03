@@ -17,6 +17,9 @@ export default class ProgressModal extends Modal {
 		this.titleEl.addClass("progress-title-qg");
 		this.titleEl.setText("Generating Quiz");
 
+		// Add wait cursor to document body
+		document.body.style.cursor = "wait";
+
 		// Status text
 		this.statusText = this.contentEl.createDiv("progress-status-qg");
 		this.statusText.setText("Preparing...");
@@ -39,6 +42,13 @@ export default class ProgressModal extends Modal {
 		this.statusText.setText(status);
 		this.progressBar.style.width = `${percentage}%`;
 		
+		// Add pulsing animation during the waiting/generating phase (step 3)
+		if (step === 3) {
+			this.progressBar.addClass("pulsing");
+		} else {
+			this.progressBar.removeClass("pulsing");
+		}
+		
 		const percentText = document.getElementById("progress-percent-text");
 		if (percentText) {
 			percentText.setText(`${percentage}%`);
@@ -46,6 +56,7 @@ export default class ProgressModal extends Modal {
 	}
 
 	public complete(): void {
+		this.progressBar.removeClass("pulsing");
 		this.updateProgress(this.totalSteps, "Complete!");
 		setTimeout(() => {
 			this.close();
@@ -53,11 +64,14 @@ export default class ProgressModal extends Modal {
 	}
 
 	public error(message: string): void {
+		this.progressBar.removeClass("pulsing");
 		this.statusText.setText(message);
 		this.statusText.addClass("progress-error-qg");
 	}
 
 	public onClose(): void {
+		// Restore default cursor
+		document.body.style.cursor = "";
 		super.onClose();
 	}
 }

@@ -171,8 +171,8 @@ export default class SelectorModal extends Modal {
 				progressModal.updateProgress(2, `Sending to ${this.settings.provider}...`);
 				const generator = GeneratorFactory.createInstance(this.settings);
 				
-				// Step 3: Waiting for response
-				progressModal.updateProgress(3, "Waiting for response...");
+				// Step 3: Generating quiz (connected to API, waiting for generation to complete)
+				progressModal.updateProgress(3, `Connected to ${this.settings.provider}, generating quiz questions...`);
 				const generatedQuestions = await generator.generateQuiz([...this.selectedNotes.values()]);
 				
 				if (generatedQuestions === null) {

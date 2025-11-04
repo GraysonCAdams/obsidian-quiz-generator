@@ -38,3 +38,23 @@ export interface ShortOrLongAnswer {
 	question: string;
 	answer: string;
 }
+
+export interface QuizResult {
+	questionIndex: number;
+	correct: boolean;
+}
+
+export interface QuestionAttempt {
+	questionHash: string;
+	correct: boolean;
+	timestamp: string;
+}
+
+export interface QuizStatistics {
+	totalQuestions: number;
+	correctAnswers: number;
+	incorrectAnswers: number;
+	score: number; // percentage
+	completedAt?: string; // ISO timestamp
+	questionAttempts?: QuestionAttempt[];
+}

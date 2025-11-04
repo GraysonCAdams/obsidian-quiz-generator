@@ -223,7 +223,7 @@ export default class SelectorModal extends Modal {
 				// Complete progress
 				progressModal.complete();
 
-				this.quiz = new QuizModalLogic(this.app, this.settings, questions, [...this.selectedNoteFiles.values()].flat());
+				this.quiz = new QuizModalLogic(this.app, this.settings, questions, [...this.selectedNoteFiles.values()].flat(), undefined, undefined, undefined, this.plugin);
 				await this.quiz.renderQuiz();
 				this.toggleButtons([SelectorModalButton.QUIZ], false);
 			} catch (error) {
@@ -296,8 +296,8 @@ export default class SelectorModal extends Modal {
 			this.searchContainer.empty();
 		} else {
 			this.searchContainer = this.contentEl.createDiv("search-container-qg");
-		}
-		
+	}
+
 		// Input group with search input and buttons inline
 		const searchInputGroup = this.searchContainer.createDiv("search-input-group-qg");
 		
@@ -575,7 +575,7 @@ export default class SelectorModal extends Modal {
 		// Get inline tags
 		if (cache.tags) {
 			tags.push(...cache.tags.map((tagCache: any) => tagCache.tag));
-		}
+				}
 
 		return tags;
 	}
@@ -709,7 +709,7 @@ export default class SelectorModal extends Modal {
 			}
 		});
 		autoSelectRow.createSpan({ text: "Auto-select all that match criteria", cls: "filter-checkbox-label-qg" });
-	}
+		}
 
 
 	private renderNote(note: TFile): void {

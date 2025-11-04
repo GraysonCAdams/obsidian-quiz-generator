@@ -1,0 +1,156 @@
+name: Build and Release
+
+# This workflow automatically builds and releases the Obsidian plugin on merges to main.
+#
+# Features:
+# - Auto-bumps patch version if version wasn't manually changed
+# - Builds the plugin (main.js, manifest.json, styles.css, versions.json)
+# - Creates a GitHub release with the plugin artifact as a zip file
+# - Commits version bump back to main (with [skip ci] to prevent infinite loops)
+#
+# Usage:
+# - To manually bump version: Update version in package.json before merging
+# - To skip release: Add [skip ci] to commit message
+# - Version format: Semantic versioning (MAJOR.MINOR.PATCH)
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Check commit message
+        id: check-commit
+        run: |
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+          if [[ "$COMMIT_MSG" == *"[skip ci]"* ]] || [[ "$COMMIT_MSG" == *"chore: bump version"* ]]; then
+            echo "skip_workflow=true" >> $GITHUB_OUTPUT
+            echo "Skipping workflow - commit message indicates version bump or [skip ci]"
+          else
+            echo "skip_workflow=false" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Setup Node.js
+        if: steps.check-commit.outputs.skip_workflow != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        if: steps.check-commit.outputs.skip_workflow != 'true'
+        run: npm ci
+      
+      - name: Check for version change and auto-bump
+        if: steps.check-commit.outputs.skip_workflow != 'true'
+        id: version-check
+        run: |
+          # Get current version from package.json
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+          
+          # Check if version was changed in the last commit
+          VERSION_CHANGED=false
+          PREV_VERSION=""
+          
+          # Get previous version from HEAD~1 if it exists
+          if git rev-parse --verify HEAD~1 > /dev/null 2>&1; then
+            PREV_VERSION=$(git show HEAD~1:package.json | grep -o '"version": *"[^"]*"' | cut -d'"' -f4 || echo "")
+          fi
+          
+          # Check if version changed in this commit
+          if [ ! -z "$PREV_VERSION" ] && [ "$PREV_VERSION" != "$CURRENT_VERSION" ]; then
+            VERSION_CHANGED=true
+            NEW_VERSION=$CURRENT_VERSION
+            echo "✓ Version manually changed from $PREV_VERSION to $NEW_VERSION"
+          else
+            # Auto-bump patch version
+            npm version patch --no-git-tag-version
+            NEW_VERSION=$(node -p "require('./package.json').version")
+            echo "✓ Auto-bumped version from $CURRENT_VERSION to $NEW_VERSION"
+          fi
+          
+          echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "version_changed=$VERSION_CHANGED" >> $GITHUB_OUTPUT
+      
+      - name: Update manifest and versions
+        if: steps.check-commit.outputs.skip_workflow != 'true'
+        run: npm run version
+      
+      - name: Build plugin
+        if: steps.check-commit.outputs.skip_workflow != 'true'
+        run: npm run build
+      
+      - name: Verify build artifacts
+        if: steps.check-commit.outputs.skip_workflow != 'true'
+        run: |
+          if [ ! -f "main.js" ]; then
+            echo "Error: main.js not found after build"
+            exit 1
+          fi
+          if [ ! -f "manifest.json" ]; then
+            echo "Error: manifest.json not found"
+            exit 1
+          fi
+          if [ ! -f "styles.css" ]; then
+            echo "Error: styles.css not found"
+            exit 1
+          fi
+          if [ ! -f "versions.json" ]; then
+            echo "Error: versions.json not found"
+            exit 1
+          fi
+          echo "✓ All build artifacts present"
+      
+      - name: Create release archive
+        if: steps.check-commit.outputs.skip_workflow != 'true'
+        run: |
+          mkdir -p release
+          cp main.js manifest.json styles.css versions.json release/
+          cd release
+          zip -r ../quiz-generator-${{ steps.version-check.outputs.new_version }}.zip .
+          cd ..
+          ls -lh quiz-generator-*.zip
+      
+      - name: Create GitHub Release
+        if: steps.check-commit.outputs.skip_workflow != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version-check.outputs.new_version }}
+          name: Release v${{ steps.version-check.outputs.new_version }}
+          body: |
+            ## Changes in v${{ steps.version-check.outputs.new_version }}
+            
+            This release was automatically created from the latest changes in main.
+            
+            ### Installation
+            1. Download the `quiz-generator-${{ steps.version-check.outputs.new_version }}.zip` file
+            2. Extract it to your Obsidian vault's `.obsidian/plugins/quiz-generator/` directory
+            3. Reload Obsidian or restart the app
+          files: |
+            quiz-generator-${{ steps.version-check.outputs.new_version }}.zip
+          draft: false
+          prerelease: false
+      
+      - name: Commit version bump (if auto-bumped)
+        if: steps.check-commit.outputs.skip_workflow != 'true' && steps.version-check.outputs.version_changed == 'false'
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add package.json manifest.json versions.json
+          git commit -m "chore: bump version to ${{ steps.version-check.outputs.new_version }} [skip ci]"
+          git push
+

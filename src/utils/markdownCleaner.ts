@@ -4,6 +4,7 @@ export const cleanUpNoteContents = (noteContents: string, hasFrontMatter: boolea
 		cleanedContents = removeFrontMatter(cleanedContents);
 	}
 	cleanedContents = removeObsidianComments(cleanedContents);
+	cleanedContents = removeMetadataCodeBlocks(cleanedContents);
 	cleanedContents = removeTodoItems(cleanedContents);
 	cleanedContents = removeAnecdotalCallouts(cleanedContents);
 	cleanedContents = cleanUpLinks(cleanedContents);
@@ -21,6 +22,39 @@ const removeObsidianComments = (input: string): string => {
 	// Remove Obsidian comments: %%comment%%
 	const commentRegex = /%%[\s\S]*?%%/g;
 	return input.replace(commentRegex, "");
+};
+
+const removeMetadataCodeBlocks = (input: string): string => {
+	// Remove code blocks that are Obsidian plugin metadata/commands, not actual code content
+	// Common plugins: button, todoist, dataview, tasks, tracker, etc.
+	const metadataPlugins = [
+		'button',
+		'todoist',
+		'dataview',
+		'dataviewjs',
+		'tasks',
+		'tracker',
+		'breadcrumbs',
+		'kanban',
+		'excalidraw',
+		'mermaid',
+		'chart',
+		'timeline'
+	];
+	
+	let result = input;
+	
+	// Remove code blocks with these language identifiers
+	for (const plugin of metadataPlugins) {
+		// Match ```plugin ... ``` code blocks
+		const codeBlockRegex = new RegExp(
+			`\`\`\`${plugin}[\\s\\S]*?\`\`\``,
+			'gi'
+		);
+		result = result.replace(codeBlockRegex, "");
+	}
+	
+	return result;
 };
 
 const removeTodoItems = (input: string): string => {

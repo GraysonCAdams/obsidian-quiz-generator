@@ -1,18 +1,32 @@
-import { App, Component, MarkdownRenderer, Notice } from "obsidian";
-import { useEffect, useRef, useState } from "react";
+import { App, Component, MarkdownRenderer, Notice, setIcon } from "obsidian";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { FillInTheBlank } from "../../utils/types";
 
 interface FillInTheBlankQuestionProps {
 	app: App;
 	question: FillInTheBlank;
+	onAnswer?: (correct: boolean) => void;
+	onChoose?: () => void;
+	answered?: boolean;
+	onRepeat?: () => void;
+	showRepeat?: boolean;
 }
 
-const FillInTheBlankQuestion = ({ app, question }: FillInTheBlankQuestionProps) => {
+const FillInTheBlankQuestion = ({ app, question, onAnswer, onChoose, answered = false, onRepeat, showRepeat = false }: FillInTheBlankQuestionProps) => {
 	const [submitted, setSubmitted] = useState<boolean>(false);
 	const [revealedAnswers, setRevealedAnswers] = useState<boolean>(false);
+	
+	// If already answered, set submitted state
+	useEffect(() => {
+		if (answered) {
+			setSubmitted(true);
+			setRevealedAnswers(true);
+		}
+	}, [answered]);
 	const questionContainerRef = useRef<HTMLDivElement>(null);
 	const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 	const inputValuesRef = useRef<string[]>(Array(question.answer.length).fill(""));
+	const repeatButtonRef = useRef<HTMLAnchorElement | null>(null);
 
 	useEffect(() => {
 		if (!questionContainerRef.current) return;
@@ -21,7 +35,7 @@ const FillInTheBlankQuestion = ({ app, question }: FillInTheBlankQuestionProps) 
 		inputRefs.current = [];
 
 		const container = questionContainerRef.current;
-		let blankIndex = 0;
+			let blankIndex = 0;
 
 		// Split by blanks and create elements
 		const parts = question.question.split(/(`_+`)/g);
@@ -44,11 +58,20 @@ const FillInTheBlankQuestion = ({ app, question }: FillInTheBlankQuestionProps) 
 
 					const currentIndex = blankIndex;
 					input.value = inputValuesRef.current[currentIndex];
+					let hasPlayedChoose = false;
 
 					// Handle input changes
 					input.addEventListener("input", (e) => {
 						inputValuesRef.current[currentIndex] = (e.target as HTMLInputElement).value;
+						if (onChoose && !hasPlayedChoose && inputValuesRef.current[currentIndex].length === 1) {
+							// Play choose sound on first character typed
+							onChoose();
+							hasPlayedChoose = true;
+						}
 					});
+					
+					// Handle focus for choose sound - removed to prevent issues
+					// onChoose will be triggered by first character typed instead
 
 					// Handle Enter key
 					input.addEventListener("keydown", (e) => {
@@ -64,11 +87,37 @@ const FillInTheBlankQuestion = ({ app, question }: FillInTheBlankQuestionProps) 
 			} else if (part) {
 				// Regular text - render as markdown
 				const textSpan = container.createEl("span", { cls: "fill-blank-text-qg" });
-				const component = new Component();
+			const component = new Component();
 				MarkdownRenderer.render(app, part, textSpan, "", component);
 			}
 		});
-	}, [app, question, submitted]);
+		
+		// Insert repeat button inline with question text if enabled (find the first text span)
+		if (showRepeat && onRepeat) {
+			const textSpans = container.querySelectorAll('.fill-blank-text-qg');
+			if (textSpans.length > 0) {
+				// Use first text span instead of last to make it inline with the title
+				const firstTextSpan = textSpans[0];
+				const existingRepeat = container.querySelector('.quiz-repeat-question-link-qg');
+				if (existingRepeat) {
+					existingRepeat.remove();
+				}
+				
+				const repeatLink = document.createElement('a');
+				repeatLink.className = 'quiz-repeat-question-link-qg';
+				repeatLink.href = '#';
+				repeatLink.title = 'Repeat question';
+				repeatLink.addEventListener('click', (e) => {
+					e.preventDefault();
+					if (onRepeat) onRepeat();
+				});
+				repeatButtonRef.current = repeatLink;
+				setIcon(repeatLink, 'repeat');
+				// Insert inline with the first text span
+				firstTextSpan.appendChild(repeatLink);
+			}
+		}
+	}, [app, question.question, question.answer, submitted]);
 
 	const handleSubmit = () => {
 		const currentValues = inputValuesRef.current;
@@ -88,6 +137,7 @@ const FillInTheBlankQuestion = ({ app, question }: FillInTheBlankQuestionProps) 
 			setRevealedAnswers(true);
 			setSubmitted(true);
 			new Notice("Answers revealed");
+			onAnswer?.(false);
 			return;
 		}
 
@@ -108,6 +158,7 @@ const FillInTheBlankQuestion = ({ app, question }: FillInTheBlankQuestionProps) 
 		});
 
 		setSubmitted(true);
+		onAnswer?.(allCorrect);
 
 		if (allCorrect) {
 			new Notice("Correct!");

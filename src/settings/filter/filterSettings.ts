@@ -4,8 +4,8 @@ import { FilterBookmark } from "../../filters/filterTypes";
 import SelectorModal from "../../ui/selector/selectorModal";
 
 export default function displayFilterSettings(containerEl: HTMLElement, plugin: QuizGenerator): void {
-	containerEl.createEl("h2", { text: "Filter Bookmarks" });
-
+	new Setting(containerEl).setName("Filter Bookmarks").setHeading();
+	
 	new Setting(containerEl)
 		.setName("Bookmarked Filters")
 		.setDesc("Manage your saved filter queries. Each bookmark creates a command that can be assigned a hotkey.");

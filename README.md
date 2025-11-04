@@ -1,8 +1,12 @@
-# Quiz Generator
+# Quiz Generator Reborn
 
 [![GitHub Downloads](https://img.shields.io/github/downloads/ECuiDev/obsidian-quiz-generator/total?labelColor=21262d&color=238636&logo=github&style=for-the-badge)](https://github.com/ECuiDev/obsidian-quiz-generator/releases) [![Obsidian Downloads](https://img.shields.io/badge/dynamic/json?labelColor=21262d&color=%23483699&label=downloads&query=%24%5B%22quiz-generator%22%5D.downloads&url=https%3A%2F%2Fraw.githubusercontent.com%2Fobsidianmd%2Fobsidian-releases%2Fmaster%2Fcommunity-plugin-stats.json&logo=obsidian&style=for-the-badge)](https://github.com/ECuiDev/obsidian-quiz-generator/releases) [![Release](https://img.shields.io/github/v/release/ECuiDev/obsidian-quiz-generator?display_name=tag&labelColor=21262d&color=1f6feb&style=for-the-badge)](https://github.com/ECuiDev/obsidian-quiz-generator/releases/latest)
 
-**Quiz Generator** is a plugin for [Obsidian](https://obsidian.md/) that leverages the power of various AI models to generate interactive, exam-style questions from your notes. Whether you're a student preparing for exams or an educator designing assessments, this plugin streamlines the question creation process.
+**Quiz Generator Reborn** is a plugin for [Obsidian](https://obsidian.md/) that leverages the power of various AI models to generate interactive, exam-style questions from your notes. Whether you're a student preparing for exams or an educator designing assessments, this plugin streamlines the question creation process.
+
+## Credits
+
+This plugin was originally created by [Edward Cui](https://github.com/ECuiDev) and is now maintained by [Grayson](https://grayada.ms).
 
 ## Demo
 
@@ -41,7 +45,7 @@ This plugin is now available in the **Community plugins** page in Obsidian. You 
 
 1. Install the plugin from the **Community plugins** page in Obsidian.
    - **Settings** → **Community plugins** → **Browse**.
-   - Search for `Quiz Generator`.
+   - Search for `Quiz Generator Reborn`.
    - Select the plugin to open its page and then select **Install**.
    - Select **Enable** on the plugin page or go back to the **Community plugins** page and toggle the switch.
 2. Open the plugin settings and enter your API key for the selected provider.
@@ -60,7 +64,7 @@ This plugin is now available in the **Community plugins** page in Obsidian. You 
 
 ### Generation
 
-- Open the command palette and select "Quiz Generator: Open generator" or select the [brain-circuit](https://lucide.dev/icons/brain-circuit) icon in the left sidebar.
+- Open the command palette and select "Quiz Generator Reborn: Open generator" or select the [brain-circuit](https://lucide.dev/icons/brain-circuit) icon in the left sidebar.
 - Select the [file](https://lucide.dev/icons/file-plus-2) and [folder](https://lucide.dev/icons/folder-plus) icons to add notes and folders.
   - Adding a folder adds all the notes inside it, as well as any notes in its subfolders (can be changed in the settings). If you select an extremely large folder (thousands of files and hundreds of subfolders), it could take a few seconds for it to be added.
 - Select the [eye](https://lucide.dev/icons/eye) icon to view the contents of selected notes and folders.
@@ -76,7 +80,7 @@ This plugin is now available in the **Community plugins** page in Obsidian. You 
 
 ### Reviewing Saved Quizzes
 
-- Open the command palette and select "Quiz Generator: Open quiz from active note" or right-click a note in the file explorer and select "Open quiz from this note" in the file menu.
+- Open the command palette and select "Quiz Generator Reborn: Open quiz from active note" or right-click a note in the file explorer and select "Open quiz from this note" in the file menu.
 
 ### Miscellaneous
 
@@ -350,7 +354,7 @@ Long Answer: Explain the difference between a stock and a bond, and discuss the 
 
 ## Coming Soon
 
-I'm actively working on bringing more features and improvements to Quiz Generator. Stay tuned for the following updates:
+I'm actively working on bringing more features and improvements to Quiz Generator Reborn. Stay tuned for the following updates:
 
 ### Next Release
 

@@ -29,10 +29,10 @@ export default class QuizReviewer {
 
 		const fileContents = await this.app.vault.cachedRead(file);
 		this.calloutParser(fileContents);
-		this.spacedRepetitionParser(fileContents);
 
 		if (this.quiz.length > 0) {
-			await new QuizModalLogic(this.app, this.settings, this.quiz, []).renderQuiz();
+			// Pass the file so results can be saved back to it
+			await new QuizModalLogic(this.app, this.settings, this.quiz, [], file).renderQuiz();
 		} else {
 			new Notice("No questions in this note");
 		}
@@ -82,52 +82,6 @@ export default class QuizReviewer {
 		this.matchTrueFalseFillInTheBlankShortOrLongAnswer(fileContents, trueFalseFillInTheBlankShortOrLongAnswerRegex);
 	}
 
-	private spacedRepetitionParser(fileContents: string): void {
-		const inlineSeparator = this.escapeSpecialCharacters(this.settings.inlineSeparator);
-		const multilineSeparator = this.escapeSpecialCharacters(this.settings.multilineSeparator);
-
-		const choices = this.generateSpacedRepetitionChoicesRegex();
-		const choicesAnswer = this.generateSpacedRepetitionChoicesAnswerRegex();
-		const multipleChoiceSelectAllThatApply = /[*_]{0,3}(?:multiple\s*choice|select\s*all\s*that\s*apply):[*_]{0,3}\s*(.+)\s*/;
-		const multipleChoiceRegex = new RegExp(
-			multipleChoiceSelectAllThatApply.source +
-			choices.source +
-			multilineSeparator.source +
-			"\\s*" +
-			choicesAnswer.source,
-			"gi"
-		);
-		this.matchMultipleChoiceSelectAllThatApply(fileContents, multipleChoiceRegex);
-
-		const matching = /[*_]{0,3}matching:[*_]{0,3}\s*(.+)\s*/;
-		const groupHeader = /.+\s*/;
-		const groupAChoices = choices.source.substring(0, choices.source.length / 2);
-		const groupBChoices = choices.source.substring(choices.source.length / 2);
-		const matchingAnswer = this.generateSpacedRepetitionMatchingAnswerRegex();
-		const matchingRegex = new RegExp(
-			matching.source +
-			groupHeader.source +
-			groupAChoices +
-			groupHeader.source +
-			groupBChoices +
-			multilineSeparator.source +
-			"\\s*" +
-			matchingAnswer.source,
-			"gi"
-		);
-		this.matchMatching(fileContents, matchingRegex);
-
-		const trueFalseFillInTheBlankShortOrLong = /[*_]{0,3}(?:true\s*or\s*false|fill\s*in\s*the\s*blank|(?:short|long)\s*answer):[*_]{0,3}\s*(.+)\s*/;
-		const trueFalseFillInTheBlankShortOrLongAnswer = /\s*(.+)/;
-		const trueFalseFillInTheBlankShortOrLongRegex = new RegExp(
-			trueFalseFillInTheBlankShortOrLong.source +
-			inlineSeparator.source +
-			trueFalseFillInTheBlankShortOrLongAnswer.source,
-			"gi"
-		);
-		this.matchTrueFalseFillInTheBlankShortOrLongAnswer(fileContents, trueFalseFillInTheBlankShortOrLongRegex);
-	}
-
 	private generateCalloutChoicesRegex(): RegExp {
 		const choices: string[] = [];
 		for (let i = 0; i < 26; i++) {
@@ -150,32 +104,6 @@ export default class QuizReviewer {
 		const pairs: string[] = [];
 		for (let i = 0; i < 13; i++) {
 			pairs.push(`(?:>\\s*>\\s*([a-m]\\)\\s*-+>\\s*[n-z]\\))\\s*)?`);
-		}
-		return new RegExp(pairs.join(""));
-	}
-
-	private generateSpacedRepetitionChoicesRegex(): RegExp {
-		const choices: string[] = [];
-		for (let i = 0; i < 26; i++) {
-			const letter = String.fromCharCode(97 + i);
-			choices.push(`(?:${letter}\\)\\s*(.+)\\s*)?`);
-		}
-		return new RegExp(choices.join(""));
-	}
-
-	private generateSpacedRepetitionChoicesAnswerRegex(): RegExp {
-		const choices: string[] = [];
-		for (let i = 0; i < 26; i++) {
-			const letter = String.fromCharCode(97 + i);
-			choices.push(`(?:(${letter})\\).*\\s*)?`);
-		}
-		return new RegExp(choices.join(""));
-	}
-
-	private generateSpacedRepetitionMatchingAnswerRegex(): RegExp {
-		const pairs: string[] = [];
-		for (let i = 0; i < 13; i++) {
-			pairs.push(`(?:([a-m]\\)\\s*-+>\\s*[n-z]\\))\\s*)?`);
 		}
 		return new RegExp(pairs.join(""));
 	}
@@ -247,10 +175,5 @@ export default class QuizReviewer {
 				} as ShortOrLongAnswer);
 			}
 		}
-	}
-
-	private escapeSpecialCharacters(pattern: string): RegExp {
-		const escapedPattern = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-		return new RegExp(escapedPattern);
 	}
 }

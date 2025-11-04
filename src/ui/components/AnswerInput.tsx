@@ -5,11 +5,13 @@ interface AnswerInputProps {
 	onSubmit: (input: string) => void;
 	clearInputOnSubmit?: boolean;
 	disabled?: boolean;
+	onChoose?: () => void;
 }
 
-const AnswerInput = ({ onSubmit, clearInputOnSubmit = true, disabled = false }: AnswerInputProps) => {
+const AnswerInput = ({ onSubmit, clearInputOnSubmit = true, disabled = false, onChoose }: AnswerInputProps) => {
 	const [userInput, setUserInput] = useState<string>("");
 	const inputRef = useRef<HTMLTextAreaElement>(null);
+	const hasPlayedChoose = useRef<boolean>(false);
 
 	const adjustInputHeight = () => {
 		if (inputRef.current) {
@@ -21,6 +23,10 @@ const AnswerInput = ({ onSubmit, clearInputOnSubmit = true, disabled = false }: 
 	const handleInputChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
 		setUserInput(event.target.value);
 		adjustInputHeight();
+		if (onChoose && !hasPlayedChoose.current && event.target.value.length === 1) {
+			onChoose();
+			hasPlayedChoose.current = true;
+		}
 	};
 
 	const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -46,6 +52,12 @@ const AnswerInput = ({ onSubmit, clearInputOnSubmit = true, disabled = false }: 
 			ref={inputRef}
 			onChange={handleInputChange}
 			onKeyDown={handleKeyDown}
+			onFocus={() => {
+				if (onChoose && !hasPlayedChoose.current && userInput === "") {
+					onChoose();
+					hasPlayedChoose.current = true;
+				}
+			}}
 			disabled={disabled}
 			placeholder="Type your answer here..."
 			rows={1}

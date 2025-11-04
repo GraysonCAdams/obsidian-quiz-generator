@@ -1,10 +1,10 @@
 {
 	"id": "quiz-generator",
-	"name": "Quiz Generator",
-	"version": "2.3.2",
+	"name": "Quiz Generator Reborn",
+	"version": "2.4.0",
 	"minAppVersion": "0.15.0",
-	"description": "Generate interactive flashcards from your notes using models from OpenAI (ChatGPT), Google (Gemini), Ollama (local LLMs), and more. Or manually create your own to use with the quiz UI.",
-	"author": "Edward Cui",
-	"authorUrl": "https://github.com/ECuiDev",
+	"description": "Generate interactive exam-style quizzes from your notes using AI models (OpenAI, Google, Anthropic, Ollama, and more). Features gamification, conversation mode, text-to-speech, and comprehensive quiz tracking. Create multiple question types or manually build your own quizzes.",
+	"author": "Grayson (maintainer), Edward Cui (original author)",
+	"authorUrl": "https://grayada.ms",
 	"isDesktopOnly": false
 }

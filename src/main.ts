@@ -4,6 +4,8 @@ import SelectorModal from "./ui/selector/selectorModal";
 import QuizSettingsTab from "./settings/settings";
 import QuizReviewer from "./services/quizReviewer";
 import { FilterEvaluator } from "./filters/filterEvaluator";
+import MissedQuestionsModal from "./ui/selector/missedQuestionsModal";
+import AudioCache from "./services/audioCache";
 
 export default class QuizGenerator extends Plugin {
 	public settings: QuizSettings = DEFAULT_SETTINGS;
@@ -20,6 +22,14 @@ export default class QuizGenerator extends Plugin {
 
 		this.addRibbonIcon("brain-circuit", "Open generator", (): void => {
 			new SelectorModal(this.app, this).open();
+		});
+
+		this.addCommand({
+			id: "generate-quiz-from-missed",
+			name: "Generate a quiz from missed questions",
+			callback: (): void => {
+				new MissedQuestionsModal(this.app, this.settings, this).open();
+			}
 		});
 
 		this.addCommand({
@@ -50,8 +60,19 @@ export default class QuizGenerator extends Plugin {
 		this.addSettingTab(new QuizSettingsTab(this.app, this));
 	}
 
+	onunload(): void {
+		// Clear audio cache when plugin is disabled or Obsidian is closed
+		AudioCache.getInstance().clear();
+	}
+
 	async loadSettings(): Promise<void> {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		const savedSettings = await this.loadData();
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, savedSettings);
+		
+		// Deep merge gamification config to ensure new properties are added
+		if (savedSettings && savedSettings.gamification) {
+			this.settings.gamification = Object.assign({}, DEFAULT_SETTINGS.gamification, savedSettings.gamification);
+		}
 	}
 
 	async saveSettings(): Promise<void> {

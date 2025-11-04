@@ -31,3 +31,14 @@ export const cosineSimilarity = (vec1: number[], vec2: number[]): number => {
 	const mag2 = magnitude(vec2);
 	return dot / (mag1 * mag2);
 };
+
+// Simple hash function for question identification
+export const hashString = (str: string): string => {
+	let hash = 0;
+	for (let i = 0; i < str.length; i++) {
+		const char = str.charCodeAt(i);
+		hash = ((hash << 5) - hash) + char;
+		hash = hash & hash; // Convert to 32-bit integer
+	}
+	return Math.abs(hash).toString(36);
+};

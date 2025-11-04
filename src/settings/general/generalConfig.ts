@@ -23,13 +23,83 @@ export const languages: Record<string, string> = {
 	Indonesian: "Bahasa Indonesia",
 };
 
+export interface ConversationStyle {
+	id: string;
+	name: string;
+	description: string;
+	prompt: string;
+	isCustom: boolean;
+}
+
+export interface GamificationConfig {
+	enabled: boolean;
+	showStreakCounter: boolean;
+	showDailyStreak: boolean;
+	showTimer: boolean;
+	showTimerDuringQuiz: boolean;
+	showAccuracy: boolean;
+	showReflection: boolean;
+	showStarRating: boolean;
+	enableFlameEffect: boolean;
+	questionTimerEnabled: boolean;
+	questionTimerSeconds: number;
+	shortAnswerTimerEnabled: boolean;
+	shortAnswerTimerSeconds: number;
+	longAnswerTimerEnabled: boolean;
+	longAnswerTimerSeconds: number;
+	elevenLabsEnabled: boolean;
+	elevenLabsApiKey: string;
+	elevenLabsVoiceId: string;
+	soundEffectsEnabled: boolean;
+	tickingSoundEnabled: boolean;
+	soundVolume: number; // 0-100
+	autoProgressEnabled: boolean;
+	autoProgressSeconds: number;
+	paginationEnabled: boolean; // Allow manual navigation between questions
+	soundsMuted: boolean; // Session-level mute for sound effects
+	voiceMuted: boolean; // Session-level mute for voice
+}
+
 export interface GeneralConfig {
 	showNotePath: boolean;
 	showFolderPath: boolean;
 	includeSubfolderNotes: boolean;
 	randomizeQuestions: boolean;
 	language: string;
+	autoRenameQuizWithScore: boolean;
+	customConversationStyles: ConversationStyle[];
+	customConversationPromptDraft: string;
+	gamification: GamificationConfig;
 }
+
+export const DEFAULT_GAMIFICATION_CONFIG: GamificationConfig = {
+	enabled: true,
+	showStreakCounter: true,
+	showDailyStreak: true,
+	showTimer: true,
+	showTimerDuringQuiz: false,
+	showAccuracy: true,
+	showReflection: true,
+	showStarRating: true,
+	enableFlameEffect: true,
+	questionTimerEnabled: false,
+	questionTimerSeconds: 30,
+	shortAnswerTimerEnabled: false,
+	shortAnswerTimerSeconds: 120, // 2 minutes default
+	longAnswerTimerEnabled: false,
+	longAnswerTimerSeconds: 300, // 5 minutes default
+	elevenLabsEnabled: false,
+	elevenLabsApiKey: "",
+	elevenLabsVoiceId: "",
+	soundEffectsEnabled: false,
+	tickingSoundEnabled: false,
+	soundVolume: 50, // Default 50%
+	autoProgressEnabled: true,
+	autoProgressSeconds: 3,
+	paginationEnabled: false, // Disabled by default - forces auto-progress
+	soundsMuted: false,
+	voiceMuted: false,
+};
 
 export const DEFAULT_GENERAL_SETTINGS: GeneralConfig = {
 	showNotePath: false,
@@ -37,4 +107,8 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralConfig = {
 	includeSubfolderNotes: true,
 	randomizeQuestions: false,
 	language: "English",
+	autoRenameQuizWithScore: false,
+	customConversationStyles: [],
+	customConversationPromptDraft: "",
+	gamification: DEFAULT_GAMIFICATION_CONFIG,
 };

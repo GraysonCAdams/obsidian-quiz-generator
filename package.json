@@ -16,6 +16,7 @@
 	"author": "Grayson <https://grayada.ms> (maintainer), Edward Cui <https://github.com/ECuiDev> (original author)",
 	"license": "MIT",
 	"devDependencies": {
+		"@types/diff-match-patch": "^1.0.36",
 		"@types/node": "^22.8.1",
 		"@types/react": "^18.3.12",
 		"@types/react-dom": "^18.3.1",
@@ -41,6 +42,8 @@
 		"@langchain/openai": "^0.3.11",
 		"@mistralai/mistralai": "^1.1.0",
 		"cohere-ai": "^7.14.0",
+		"diff-match-patch": "^1.0.5",
+		"jszip": "^3.10.1",
 		"langchain": "^0.3.5",
 		"localforage": "^1.10.0",
 		"ollama": "^0.5.9",

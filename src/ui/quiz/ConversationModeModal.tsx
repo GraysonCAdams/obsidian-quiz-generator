@@ -285,18 +285,27 @@ Let's have a natural conversation where I explain my understanding, you listen a
 			this.showStyleSelection(container);
 		});
 		
-		// Only show "Use Custom Style" card if there's a saved draft
-		if (this.settings.customConversationPromptDraft && this.settings.customConversationPromptDraft.trim()) {
-			const customStyleCard = stylesContainer.createDiv("style-card-qg custom-style-card-qg");
-			
-			const customHeader = customStyleCard.createDiv("style-card-header-qg");
-			customHeader.createEl("strong", { text: "Use Custom Style" });
-			const customBadge = customHeader.createSpan("custom-badge-qg");
-			customBadge.setText("Custom");
-			
-			const customDesc = customStyleCard.createDiv("style-card-description-qg");
-			customDesc.setText("Enter your own conversation prompt. The quiz questions will be automatically appended at the end.");
-			
+		// Always show "Use Custom Style" card, but disable if not configured
+		const hasCustomPrompt = this.settings.customConversationPromptDraft && this.settings.customConversationPromptDraft.trim();
+		const customStyleCard = stylesContainer.createDiv("style-card-qg custom-style-card-qg");
+		
+		if (!hasCustomPrompt) {
+			customStyleCard.addClass("disabled-qg");
+		}
+		
+		const customHeader = customStyleCard.createDiv("style-card-header-qg");
+		customHeader.createEl("strong", { text: "Use Custom Style" });
+		const customBadge = customHeader.createSpan("custom-badge-qg");
+		customBadge.setText("Custom");
+		
+		const customDesc = customStyleCard.createDiv("style-card-description-qg");
+		if (hasCustomPrompt) {
+			customDesc.setText("Use your saved custom conversation prompt. The quiz questions will be automatically appended at the end.");
+		} else {
+			customDesc.setText("Configure a custom conversation prompt in the plugin settings to enable this option.");
+		}
+		
+		if (hasCustomPrompt) {
 			customStyleCard.addEventListener("click", () => {
 				// Show custom input
 				customOption.removeClass("hidden-qg");

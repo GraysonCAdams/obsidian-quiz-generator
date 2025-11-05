@@ -20,6 +20,8 @@ import { Provider } from "../../generators/providers";
 import FilterBuilderModal from "../filter/filterBuilderModal";
 import ProgressModal from "../progress/progressModal";
 import type QuizGenerator from "../../main";
+import JSZip from "jszip";
+import { diff_match_patch } from "diff-match-patch";
 
 const enum SelectorModalButton {
 	CLEAR,
@@ -32,6 +34,11 @@ enum TagPlacement {
 	TOP = "top",
 	BOTTOM = "bottom",
 	FRONTMATTER = "frontmatter"
+}
+
+enum ContentSelectionMode {
+	FULL_PAGE = "full",
+	CHANGES_ONLY = "changes"
 }
 
 export default class SelectorModal extends Modal {
@@ -50,6 +57,10 @@ export default class SelectorModal extends Modal {
 	private autoTags: string = "";
 	private tagPlacement: TagPlacement = TagPlacement.FRONTMATTER;
 	private autoTagContainer: HTMLDivElement | null = null;
+	private includeBacklinks: boolean = false;
+	private backlinkContainer: HTMLDivElement | null = null;
+	private contentSelectionMode: ContentSelectionMode = ContentSelectionMode.FULL_PAGE;
+	private contentSelectionContainer: HTMLDivElement | null = null;
 	private searchContainer: HTMLDivElement | null = null;
 	private searchResultsContainer: HTMLDivElement | null = null;
 	private selectedFilesContainer: HTMLDivElement | null = null;
@@ -66,6 +77,12 @@ export default class SelectorModal extends Modal {
 	private filteredTagsToRemove: Set<string> = new Set();
 	private autoSelectMatching: boolean = false;
 	private currentLoadedBookmarkId: string | null = null;
+	private isCalculatingTokens: boolean = false;
+	private tokenCalculationProgress: number = 0;
+	private tokenCalculationCancelled: boolean = false;
+	private needsRecalculation: boolean = false;
+	private preparedContent: Map<string, string> = new Map(); // Cache prepared content
+	private noteTokenElements: Map<string, HTMLElement> = new Map(); // Store token display elements
 
 	constructor(app: App, plugin: QuizGenerator, initialFiles?: TFile[], bookmarkId?: string) {
 		super(app);
@@ -106,6 +123,12 @@ export default class SelectorModal extends Modal {
 		
 		// Selected files section (below divider)
 		this.selectedFilesContainer = this.itemContainer.createDiv("selected-files-section-qg");
+		
+		// Content selection UI
+		this.renderContentSelectionUI();
+		
+		// Backlinks UI
+		this.renderBacklinksUI();
 		
 		// Auto-tagging UI
 		this.renderAutoTagUI();
@@ -167,13 +190,28 @@ export default class SelectorModal extends Modal {
 				// Step 1: Preparing content
 				progressModal.updateProgress(1, "Preparing content...");
 				
+				// Collect note contents and backlinks if enabled
+				let allContents = [...this.selectedNotes.values()];
+				if (this.includeBacklinks) {
+					const backlinkContents = await this.collectBacklinkContents();
+					if (backlinkContents.length > 0) {
+						allContents = [...allContents, ...backlinkContents];
+					}
+				}
+				
 				// Step 2: Sending to LLM
 				progressModal.updateProgress(2, `Sending to ${this.settings.provider}...`);
 				const generator = GeneratorFactory.createInstance(this.settings);
 				
 				// Step 3: Generating quiz (connected to API, waiting for generation to complete)
 				progressModal.updateProgress(3, `Connected to ${this.settings.provider}, generating quiz questions...`);
-				const generatedQuestions = await generator.generateQuiz([...this.selectedNotes.values()]);
+				
+				// Use prepared content if available, otherwise use selected notes
+				const contentToUse = this.preparedContent.size > 0 
+					? [...this.preparedContent.values()]
+					: [...this.selectedNotes.values()];
+				
+				const generatedQuestions = await generator.generateQuiz(contentToUse);
 				
 				if (generatedQuestions === null) {
 					progressModal.error("Error: Generation returned nothing");
@@ -449,9 +487,10 @@ export default class SelectorModal extends Modal {
 						return false;
 					}
 				} else {
-					// Filter by days
-					const days = parseInt(this.filterDate);
-					const daysAgo = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+					// Filter by days (supports fractional days for hours)
+					const days = parseFloat(this.filterDate);
+					const msAgo = days * 24 * 60 * 60 * 1000;
+					const daysAgo = new Date(Date.now() - msAgo);
 					if (new Date(file.stat.mtime) < daysAgo) {
 						return false;
 					}
@@ -463,8 +502,15 @@ export default class SelectorModal extends Modal {
 
 		// Auto-select all matching files if enabled
 		if (this.autoSelectMatching && matchingFiles.length > 0) {
+			console.log('[performSearch] Auto-selecting files', {
+				count: matchingFiles.length,
+				mode: this.contentSelectionMode,
+				filterDate: this.filterDate
+			});
+			
+			// Add all files first without triggering individual recalculations
 			for (const file of matchingFiles) {
-				await this.addFileToSelection(file);
+				await this.addFileToSelection(file, true); // skipCalculation = true
 				
 				// Track filtered tags for removal if enabled (supports multiple tags)
 				if (this.filterTag && this.removeFilteredTags) {
@@ -475,6 +521,26 @@ export default class SelectorModal extends Modal {
 						.map(tag => tag.startsWith("#") ? tag : `#${tag}`);
 					tags.forEach(tag => this.filteredTagsToRemove.add(tag));
 				}
+			}
+			
+			// Trigger calculation if in changes mode
+			console.log('[performSearch] Checking if should calculate', {
+				mode: this.contentSelectionMode,
+				filterDate: this.filterDate,
+				shouldCalculate: this.contentSelectionMode === ContentSelectionMode.CHANGES_ONLY && this.filterDate !== "any"
+			});
+			
+			if (this.contentSelectionMode === ContentSelectionMode.CHANGES_ONLY && this.filterDate !== "any") {
+				console.log('[performSearch] Triggering calculateAllTokens');
+				await this.calculateAllTokens();
+			} else {
+				console.log('[performSearch] Calculating tokens for full page mode');
+				// Update token count for auto-selected files
+				const totalTokens = [...this.selectedNotes.values()].reduce((sum, content) => {
+					return sum + countNoteTokens(content);
+				}, 0);
+				console.log('[performSearch] Total tokens:', totalTokens);
+				this.updatePromptTokens(totalTokens);
 			}
 		}
 
@@ -505,21 +571,34 @@ export default class SelectorModal extends Modal {
 				const filePath = resultItem.createDiv("search-result-path-qg");
 				filePath.setText(file.parent?.path || "/");
 				
-				resultItem.addEventListener("click", async () => {
-					await this.addFileToSelection(file);
-					
-					// Track filtered tags for removal if enabled (supports multiple tags)
-					if (this.filterTag && this.removeFilteredTags) {
-						const tags = this.filterTag
-							.split(',')
-							.map(tag => tag.trim())
-							.filter(tag => tag.length > 0)
-							.map(tag => tag.startsWith("#") ? tag : `#${tag}`);
-						tags.forEach(tag => this.filteredTagsToRemove.add(tag));
+			resultItem.addEventListener("click", async () => {
+				await this.addFileToSelection(file);
+				
+				// Track filtered tags for removal if enabled (supports multiple tags)
+				if (this.filterTag && this.removeFilteredTags) {
+					const tags = this.filterTag
+						.split(',')
+						.map(tag => tag.trim())
+						.filter(tag => tag.length > 0)
+						.map(tag => tag.startsWith("#") ? tag : `#${tag}`);
+					tags.forEach(tag => this.filteredTagsToRemove.add(tag));
+				}
+				
+				// Trigger calculation if in changes mode
+				if (this.contentSelectionMode === ContentSelectionMode.CHANGES_ONLY && this.filterDate !== "any") {
+					if (!this.isCalculatingTokens) {
+						await this.calculateAllTokens();
 					}
-					
-					await this.performSearch(); // Refresh search results
-				});
+				} else {
+					// Update token count for full page mode
+					const totalTokens = [...this.selectedNotes.values()].reduce((sum, content) => {
+						return sum + countNoteTokens(content);
+					}, 0);
+					this.updatePromptTokens(totalTokens);
+				}
+				
+				await this.performSearch(); // Refresh search results
+			});
 			});
 		} else {
 			this.searchResultsContainer!.style.display = "none";
@@ -586,6 +665,47 @@ export default class SelectorModal extends Modal {
 		}
 	}
 
+	private async collectBacklinkContents(): Promise<string[]> {
+		const backlinkContents: string[] = [];
+		const processedFiles = new Set<string>(); // Track processed files to avoid duplicates
+		
+		// Get all resolved links in the vault
+		const resolvedLinks = this.app.metadataCache.resolvedLinks;
+		
+		// Iterate through all selected note files
+		for (const files of this.selectedNoteFiles.values()) {
+			for (const file of files) {
+				const targetPath = file.path;
+				
+				// Find all files that link to this file
+				for (const [sourcePath, links] of Object.entries(resolvedLinks)) {
+					// Check if this source file links to our target file
+					if (!links[targetPath]) continue;
+					
+					// Skip if we've already processed this backlink
+					if (processedFiles.has(sourcePath)) continue;
+					
+					// Skip if the backlink is the same as our selected file
+					if (sourcePath === targetPath) continue;
+					
+					const backlinkFile = this.app.vault.getAbstractFileByPath(sourcePath);
+					if (!(backlinkFile instanceof TFile)) continue;
+					
+					try {
+						const content = await this.app.vault.read(backlinkFile);
+						const hasFrontMatter = getFrontMatterInfo(content).exists;
+						backlinkContents.push(cleanUpNoteContents(content, hasFrontMatter));
+						processedFiles.add(sourcePath);
+					} catch (error) {
+						console.error(`Error reading backlink file ${sourcePath}:`, error);
+					}
+				}
+			}
+		}
+		
+		return backlinkContents;
+	}
+
 	private resetFilters(): void {
 		// Reset search and filters
 		this.searchQuery = "";
@@ -602,9 +722,15 @@ export default class SelectorModal extends Modal {
 		this.autoTags = "";
 		this.tagPlacement = TagPlacement.FRONTMATTER;
 		
+		// Reset content selection and backlinks
+		this.contentSelectionMode = ContentSelectionMode.FULL_PAGE;
+		this.includeBacklinks = false;
+		
 		// Clear all selected notes
 		this.selectedNotes.clear();
 		this.selectedNoteFiles.clear();
+		this.preparedContent.clear();
+		this.noteTokenElements.clear();
 		this.selectedFilesContainer?.empty();
 		this.updatePromptTokens(0);
 		this.notePaths = this.app.vault.getMarkdownFiles().map(file => file.path);
@@ -616,8 +742,10 @@ export default class SelectorModal extends Modal {
 			this.searchResultsContainer.style.display = "none";
 		}
 		
-		// Re-render the search bar and auto-tag UI
+		// Re-render the search bar, content selection, backlinks, and auto-tag UI
 		this.renderSearchBar();
+		this.renderContentSelectionUI();
+		this.renderBacklinksUI();
 		this.renderAutoTagUI();
 		
 		// Update action link text
@@ -667,6 +795,8 @@ export default class SelectorModal extends Modal {
 		[
 			{ value: "any", label: "Any time" },
 			{ value: "last-quiz", label: "Last quiz was generated" },
+			{ value: "0.04167", label: "Last 1 hour" },
+			{ value: "0.25", label: "Last 6 hours" },
 			{ value: "1", label: "Last 24 hours" },
 			{ value: "7", label: "Last 7 days" },
 			{ value: "30", label: "Last 30 days" },
@@ -681,6 +811,8 @@ export default class SelectorModal extends Modal {
 		dateSelect.addEventListener("change", async (e) => {
 			this.filterDate = (e.target as HTMLSelectElement).value;
 			this.updateClearButtonVisibility();
+			// Re-render content selection UI to enable/disable options based on date filter
+			this.renderContentSelectionUI();
 			await this.performSearch();
 		});
 		
@@ -725,12 +857,17 @@ export default class SelectorModal extends Modal {
 		const tokensElement = itemContainer.createDiv("item-tokens-qg");
 		const tokens = countNoteTokens(this.selectedNotes.get(item.path)!);
 		tokensElement.textContent = tokens + " tokens";
+		
+		// Store reference to token element for later updates
+		this.noteTokenElements.set(item.path, tokensElement);
 
 		const viewContentsButton = itemContainer.createEl("button", "item-button-qg");
 		setIconAndTooltip(viewContentsButton, "eye", "View contents");
 		viewContentsButton.addEventListener("click", async (): Promise<void> => {
 			if (item instanceof TFile) {
-				new NoteViewerModal(this.app, item, this.modalEl).open();
+				// Pass prepared content if available, otherwise undefined (will show full note)
+				const preparedContent = this.preparedContent.get(item.path);
+				new NoteViewerModal(this.app, item, this.modalEl, preparedContent).open();
 			} else {
 				new FolderViewerModal(this.app, this.settings, this.modalEl, item).open();
 			}
@@ -738,23 +875,35 @@ export default class SelectorModal extends Modal {
 
 		const removeButton = itemContainer.createEl("button", "item-button-qg");
 		setIconAndTooltip(removeButton, "x", "Remove");
-		removeButton.addEventListener("click", (): void => {
-			this.removeNoteOrFolder(item, itemContainer);
-			this.updatePromptTokens(this.promptTokens - tokens);
-
-			if (this.selectedNotes.size === 0) {
-				this.toggleButtons([SelectorModalButton.GENERATE], true);
-			}
+		removeButton.addEventListener("click", async (): Promise<void> => {
+			this.noteTokenElements.delete(item.path);
+			await this.removeNoteOrFolder(item, itemContainer);
 		});
 
 		return tokens;
 	}
 
-	private removeNoteOrFolder(item: TFile | TFolder, element: HTMLDivElement): void {
+	private async removeNoteOrFolder(item: TFile | TFolder, element: HTMLDivElement): Promise<void> {
 		this.selectedNotes.delete(item.path);
 		this.selectedNoteFiles.delete(item.path);
+		this.preparedContent.delete(item.path);
 		this.selectedFilesContainer!.removeChild(element);
 		item instanceof TFile ? this.notePaths.push(item.path) : this.folderPaths.push(item.path);
+		
+		// Recalculate tokens after removal
+		if (this.selectedNoteFiles.size === 0) {
+			this.updatePromptTokens(0);
+			this.needsRecalculation = false;
+		} else if (this.contentSelectionMode === ContentSelectionMode.CHANGES_ONLY && this.filterDate !== "any") {
+			if (!this.isCalculatingTokens) {
+				await this.calculateAllTokens();
+			}
+		} else {
+			const totalTokens = [...this.selectedNotes.values()].reduce((sum, content) => {
+				return sum + countNoteTokens(content);
+			}, 0);
+			this.updatePromptTokens(totalTokens);
+		}
 	}
 
 	private toggleButtons(buttons: SelectorModalButton[], disabled: boolean): void {
@@ -763,7 +912,7 @@ export default class SelectorModal extends Modal {
 
 	private updatePromptTokens(tokens: number): void {
 		this.promptTokens = tokens;
-		const noteCount = this.selectedNotes.size;
+		const noteCount = this.selectedNoteFiles.size;
 		
 		// Clear and rebuild the container with clickable note count
 		this.tokenContainer.empty();
@@ -778,10 +927,63 @@ export default class SelectorModal extends Modal {
 			this.scrollToSelectedNotes();
 		});
 		
-		// Separator and token count
-		this.tokenContainer.createEl("span", {
-			text: `  •  Prompt tokens: ${this.promptTokens}`
-		});
+		// Separator and token/loading display
+		this.tokenContainer.createEl("span", { text: " • ", cls: "token-separator-qg" });
+		
+		if (this.isCalculatingTokens) {
+			// Show loading indicator with progress
+			const loadingContainer = this.tokenContainer.createEl("span", { cls: "token-loading-container-qg" });
+			
+			const loaderWrapper = loadingContainer.createEl("span", { cls: "token-loader-wrapper-qg" });
+			const loaderCircle = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+			loaderCircle.setAttribute("class", "token-loader-circle-qg");
+			loaderCircle.setAttribute("viewBox", "0 0 50 50");
+			const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+			circle.setAttribute("cx", "25");
+			circle.setAttribute("cy", "25");
+			circle.setAttribute("r", "20");
+			circle.setAttribute("fill", "none");
+			circle.setAttribute("stroke-width", "4");
+			const circumference = 2 * Math.PI * 20;
+			const offset = circumference - (this.tokenCalculationProgress / 100) * circumference;
+			circle.style.strokeDasharray = `${circumference}`;
+			circle.style.strokeDashoffset = `${offset}`;
+			loaderCircle.appendChild(circle);
+			loaderWrapper.appendChild(loaderCircle);
+			
+			loadingContainer.createEl("span", { 
+				text: `Calculating... ${Math.round(this.tokenCalculationProgress)}%`,
+				cls: "token-loading-text-qg"
+			});
+			
+			// Stop button
+			const stopBtn = loadingContainer.createEl("button", { cls: "token-stop-btn-qg" });
+			setIcon(stopBtn, "square");
+			stopBtn.title = "Stop calculation";
+			stopBtn.addEventListener("click", () => {
+				this.cancelTokenCalculation();
+			});
+		} else if (this.needsRecalculation) {
+			// Show restart button
+			const restartContainer = this.tokenContainer.createEl("span", { cls: "token-restart-container-qg" });
+			restartContainer.createEl("span", { 
+				text: "Calculation cancelled  •  ",
+				cls: "token-cancelled-text-qg"
+			});
+			
+			const restartBtn = restartContainer.createEl("span", { cls: "token-restart-btn-qg" });
+			const iconSpan = restartBtn.createSpan({ cls: "token-restart-icon-qg" });
+			setIcon(iconSpan, "refresh-cw");
+			restartBtn.createSpan({ text: "Recount Tokens" });
+			restartBtn.addEventListener("click", () => {
+				this.restartTokenCalculation();
+			});
+		} else {
+			// Show token count
+			this.tokenContainer.createEl("span", {
+				text: `Prompt tokens: ${this.promptTokens}`
+			});
+		}
 	}
 	
 	private scrollToSelectedNotes(): void {
@@ -794,7 +996,9 @@ export default class SelectorModal extends Modal {
 		return (this.settings.generateTrueFalse || this.settings.generateMultipleChoice ||
 			this.settings.generateSelectAllThatApply || this.settings.generateFillInTheBlank ||
 			this.settings.generateMatching || this.settings.generateShortAnswer || this.settings.generateLongAnswer) &&
-			this.promptTokens > 0;
+			this.promptTokens > 0 &&
+			!this.isCalculatingTokens &&
+			!this.needsRecalculation;
 	}
 
 	private hasValidAPIKey(): boolean {
@@ -822,6 +1026,156 @@ export default class SelectorModal extends Modal {
 			default:
 				return false;
 		}
+	}
+
+	private renderContentSelectionUI(): void {
+		// Clear existing container if it exists
+		if (this.contentSelectionContainer) {
+			this.contentSelectionContainer.empty();
+		} else {
+			this.contentSelectionContainer = this.contentEl.createDiv("content-selection-container-qg");
+		}
+		
+		const label = this.contentSelectionContainer.createDiv("content-selection-label-qg");
+		label.setText("Content to include:");
+		
+		const modeSelect = this.contentSelectionContainer.createEl("select", { cls: "content-selection-select-qg" });
+		[
+			{ value: ContentSelectionMode.FULL_PAGE, label: "Full page content" },
+			{ value: ContentSelectionMode.CHANGES_ONLY, label: "Content changes and new pages (requires Edit History plugin)" }
+		].forEach(option => {
+			const opt = modeSelect.createEl("option", { value: option.value, text: option.label });
+			if (option.value === this.contentSelectionMode) opt.selected = true;
+			
+			// Disable "Content changes" option if modified date is "any"
+			if (option.value === ContentSelectionMode.CHANGES_ONLY && this.filterDate === "any") {
+				opt.disabled = true;
+			}
+		});
+		
+		// If filterDate is "any" and current selection is CHANGES_ONLY, revert to FULL_PAGE
+		if (this.filterDate === "any" && this.contentSelectionMode === ContentSelectionMode.CHANGES_ONLY) {
+			this.contentSelectionMode = ContentSelectionMode.FULL_PAGE;
+			modeSelect.value = ContentSelectionMode.FULL_PAGE;
+		}
+		
+		modeSelect.addEventListener("change", async (e) => {
+			const newValue = (e.target as HTMLSelectElement).value as ContentSelectionMode;
+			
+			// Check if Edit History plugin is required and installed
+			if (newValue === ContentSelectionMode.CHANGES_ONLY) {
+				if (!this.isEditHistoryPluginInstalled()) {
+					// Revert selection
+					modeSelect.value = this.contentSelectionMode;
+					// Show install prompt
+					this.showEditHistoryRequiredModal();
+					return;
+				}
+			}
+			
+			const oldMode = this.contentSelectionMode;
+			this.contentSelectionMode = newValue;
+			
+			// If switching modes and we have selected files, trigger recalculation
+			if (oldMode !== newValue && this.selectedNoteFiles.size > 0) {
+				if (newValue === ContentSelectionMode.CHANGES_ONLY) {
+					// Switching to changes mode - auto-calculate
+					console.log('[renderContentSelectionUI] Switching to changes mode, auto-calculating');
+					await this.calculateAllTokens();
+				} else {
+					// Switching away from changes mode - clear recalculation flag and recalculate with full content
+					console.log('[renderContentSelectionUI] Switching to full page mode, recalculating');
+					this.needsRecalculation = false;
+					await this.calculateAllTokens();
+				}
+			}
+		});
+	}
+	
+	private isEditHistoryPluginInstalled(): boolean {
+		// Check if Edit History plugin is installed and enabled
+		const plugins = (this.app as any).plugins;
+		return plugins?.enabledPlugins?.has('edit-history') || false;
+	}
+	
+	private showEditHistoryRequiredModal(): void {
+		const modal = new Modal(this.app);
+		modal.titleEl.setText("Edit History Plugin Required");
+		
+		const content = modal.contentEl;
+		content.createEl("p", {
+			text: "The 'Content changes and new pages' option requires the Edit History plugin to be installed and enabled."
+		});
+		
+		content.createEl("p", {
+			text: "This plugin automatically saves edit history for your notes, allowing the quiz generator to detect what content has changed since the last quiz."
+		});
+		
+		// Plugin info with link
+		const infoContainer = content.createDiv({ cls: "edit-history-info-qg" });
+		infoContainer.createEl("p", {
+			text: "Plugin: "
+		});
+		const link = infoContainer.createEl("a", {
+			text: "Edit History",
+			href: "https://github.com/antoniotejada/obsidian-edit-history"
+		});
+		link.style.textDecoration = "underline";
+		link.addEventListener("click", (e) => {
+			e.preventDefault();
+			window.open("https://github.com/antoniotejada/obsidian-edit-history", "_blank");
+		});
+		
+		const authorText = infoContainer.createEl("p", {
+			cls: "edit-history-author-qg"
+		});
+		authorText.setText("Author: antoniotejada");
+		authorText.style.fontStyle = "italic";
+		authorText.style.marginTop = "0.5em";
+		
+		const buttonContainer = content.createDiv({ cls: "modal-button-container" });
+		
+		const installBtn = buttonContainer.createEl("button", {
+			text: "Open Community Plugins",
+			cls: "mod-cta"
+		});
+		
+		installBtn.addEventListener("click", () => {
+			// Open community plugins settings
+			(this.app as any).setting.open();
+			(this.app as any).setting.openTabById("community-plugins");
+			modal.close();
+		});
+		
+		const cancelBtn = buttonContainer.createEl("button", {
+			text: "Cancel"
+		});
+		
+		cancelBtn.addEventListener("click", () => {
+			modal.close();
+		});
+		
+		modal.open();
+	}
+
+	private renderBacklinksUI(): void {
+		// Clear existing container if it exists
+		if (this.backlinkContainer) {
+			this.backlinkContainer.empty();
+		} else {
+			this.backlinkContainer = this.contentEl.createDiv("backlink-container-qg");
+		}
+		
+		const compactRow = this.backlinkContainer.createDiv("backlink-compact-row-qg");
+		
+		// Toggle
+		const toggleLabel = compactRow.createSpan({ text: "Include backlinks", cls: "backlink-label-qg" });
+		const toggleEl = compactRow.createEl("input", { type: "checkbox", cls: "backlink-checkbox-qg" });
+		toggleEl.checked = this.includeBacklinks;
+		toggleEl.addEventListener("change", () => {
+			this.includeBacklinks = toggleEl.checked;
+			this.updateClearButtonVisibility();
+		});
 	}
 
 	private renderAutoTagUI(): void {
@@ -923,6 +1277,8 @@ export default class SelectorModal extends Modal {
 				existingBookmark.tagPlacement = this.tagPlacement;
 				existingBookmark.removeFilteredTags = this.removeFilteredTags;
 				existingBookmark.autoSelectMatching = this.autoSelectMatching;
+				existingBookmark.includeBacklinks = this.includeBacklinks;
+				existingBookmark.contentSelectionMode = this.contentSelectionMode;
 				existingBookmark.updatedAt = Date.now();
 				
 				await this.plugin.saveSettings();
@@ -945,6 +1301,8 @@ export default class SelectorModal extends Modal {
 			tagPlacement: this.tagPlacement,
 			removeFilteredTags: this.removeFilteredTags,
 			autoSelectMatching: this.autoSelectMatching,
+			includeBacklinks: this.includeBacklinks,
+			contentSelectionMode: this.contentSelectionMode,
 			createdAt: Date.now(),
 			updatedAt: Date.now()
 		};
@@ -988,9 +1346,15 @@ export default class SelectorModal extends Modal {
 		
 		// Load auto-select settings
 		this.autoSelectMatching = bmData.autoSelectMatching || false;
+		
+		// Load backlink and content selection settings
+		this.includeBacklinks = bmData.includeBacklinks || false;
+		this.contentSelectionMode = bmData.contentSelectionMode || ContentSelectionMode.FULL_PAGE;
 
 		// Update the UI to reflect loaded values
 		this.renderSearchBar();
+		this.renderContentSelectionUI();
+		this.renderBacklinksUI();
 		this.renderAutoTagUI();
 		
 		// If there are advanced filters, show them
@@ -1011,16 +1375,305 @@ export default class SelectorModal extends Modal {
 		}
 	}
 
-	private async addFileToSelection(file: TFile): Promise<void> {
+	private async addFileToSelection(file: TFile, skipCalculation: boolean = false): Promise<void> {
 		if (this.selectedNoteFiles.has(file.path)) {
 			return; // Already added
 		}
 
 		this.notePaths = this.notePaths.filter(notePath => notePath !== file.path);
-		const noteContents = await this.app.vault.cachedRead(file);
-		this.selectedNotes.set(file.path, cleanUpNoteContents(noteContents, getFrontMatterInfo(noteContents).exists));
 		this.selectedNoteFiles.set(file.path, [file]);
-		this.renderNote(file);
+		
+		// Mark that recalculation is needed if using content changes mode
+		if (this.contentSelectionMode === ContentSelectionMode.CHANGES_ONLY && this.filterDate !== "any") {
+			// Store placeholder for now
+			this.selectedNotes.set(file.path, "");
+			this.renderNote(file);
+			if (!skipCalculation) {
+				this.needsRecalculation = true;
+			}
+		} else {
+			// For full page mode, calculate immediately
+			const noteContents = await this.app.vault.cachedRead(file);
+			const contentToStore = cleanUpNoteContents(noteContents, getFrontMatterInfo(noteContents).exists);
+			this.selectedNotes.set(file.path, contentToStore);
+			this.preparedContent.set(file.path, contentToStore);
+			this.renderNote(file);
+		}
+	}
+	
+	private async calculateAllTokens(): Promise<void> {
+		console.log('[calculateAllTokens] Starting calculation', {
+			mode: this.contentSelectionMode,
+			filterDate: this.filterDate,
+			totalFiles: this.selectedNoteFiles.size
+		});
+		
+		this.isCalculatingTokens = true;
+		this.tokenCalculationProgress = 0;
+		this.tokenCalculationCancelled = false;
+		this.needsRecalculation = false;
+		this.preparedContent.clear();
+		this.updatePromptTokens(0);
+		
+		const filesToProcess = Array.from(this.selectedNoteFiles.values()).flat();
+		const totalFiles = filesToProcess.length;
+		
+		for (let i = 0; i < filesToProcess.length; i++) {
+			if (this.tokenCalculationCancelled) {
+				break;
+			}
+			
+			const file = filesToProcess[i];
+			const noteContents = await this.app.vault.cachedRead(file);
+			let contentToStore = cleanUpNoteContents(noteContents, getFrontMatterInfo(noteContents).exists);
+			
+			// If using content changes mode, extract only changes since selected date
+			if (this.contentSelectionMode === ContentSelectionMode.CHANGES_ONLY && this.filterDate !== "any") {
+				console.log(`[calculateAllTokens] Extracting changes for ${file.basename}`);
+				contentToStore = await this.extractContentChanges(file, noteContents);
+				console.log(`[calculateAllTokens] Changes extracted: ${contentToStore.length} chars`);
+			}
+			
+			this.selectedNotes.set(file.path, contentToStore);
+			this.preparedContent.set(file.path, contentToStore);
+			
+			// Update individual note token display
+			const tokenElement = this.noteTokenElements.get(file.path);
+			if (tokenElement) {
+				const tokens = countNoteTokens(contentToStore);
+				tokenElement.textContent = tokens + " tokens";
+			}
+			
+			// Update progress
+			this.tokenCalculationProgress = ((i + 1) / totalFiles) * 100;
+			
+			// Recalculate tokens
+			let totalTokens = 0;
+			for (const content of this.selectedNotes.values()) {
+				totalTokens += countNoteTokens(content);
+			}
+			this.promptTokens = totalTokens;
+			this.updatePromptTokens(totalTokens);
+		}
+		
+		if (this.tokenCalculationCancelled) {
+			this.needsRecalculation = true;
+			this.isCalculatingTokens = false;
+			this.updatePromptTokens(this.promptTokens);
+		} else {
+			this.isCalculatingTokens = false;
+			this.needsRecalculation = false;
+			console.log(`[calculateAllTokens] Completed: ${this.promptTokens} tokens`);
+			this.updatePromptTokens(this.promptTokens);
+		}
+	}
+	
+	private cancelTokenCalculation(): void {
+		this.tokenCalculationCancelled = true;
+		this.needsRecalculation = true;
+	}
+	
+	private async restartTokenCalculation(): Promise<void> {
+		await this.calculateAllTokens();
+	}
+	
+	/**
+	 * Parse base-36 encoded epoch from .edtz entry filename
+	 * Format: {base36_epoch_seconds}{isFull ? "$" : ""}
+	 */
+	private parseEditEpoch(filename: string): number {
+		const base36Str = filename.replace(/\$$/, '');
+		return parseInt(base36Str, 36) * 1000; // Convert to milliseconds
+	}
+	
+	/**
+	 * Check if entry is stored in full (ends with "$")
+	 */
+	private isFullVersion(filename: string): boolean {
+		return filename.endsWith('$');
+	}
+	
+	/**
+	 * Reconstruct file state at a given threshold time by applying patches backwards
+	 * Patches in .edtz are stored backwards (newer -> older), so applying them goes back in time
+	 */
+	private async reconstructFileAtTime(
+		zip: JSZip,
+		entries: Array<{name: string, timestamp: number, isFull: boolean, zipEntry: JSZip.JSZipObject}>,
+		thresholdMs: number,
+		latestStoredContent: string
+	): Promise<string> {
+		const dmp = new diff_match_patch();
+		let data = latestStoredContent;
+		
+		// Process entries from newest to oldest (reverse order)
+		// We want to go back in time to the threshold
+		// Edits with timestamp > threshold should be undone (applied backwards)
+		// Edits with timestamp <= threshold should remain (we stop processing)
+		for (let i = entries.length - 1; i >= 0; i--) {
+			const entry = entries[i];
+			
+			// Stop if we've reached threshold or gone past it
+			// Edits at threshold or before should remain as-is
+			if (entry.timestamp <= thresholdMs) {
+				break;
+			}
+			
+			// Apply this edit backwards (patch goes newer -> older, so applying it goes back in time)
+			const diffContent = await entry.zipEntry.async("string");
+			
+			if (entry.isFull) {
+				// Full version stored - this is the state at this timestamp
+				// The latest entry is always stored in full, so this should only happen
+				// for the first entry we process (the latest)
+				// If it's after threshold, use it as starting point and continue going back
+				// If it's at or before threshold, use it directly and stop
+				if (entry.timestamp > thresholdMs) {
+					// Use this as starting point, but we still need to apply older patches
+					// that are after threshold (though typically the latest is the only one after threshold)
+					data = diffContent;
+					// Continue processing older entries
+				} else {
+					// This full version is at or before threshold, use it directly
+					data = diffContent;
+					break;
+				}
+			} else {
+				// Patch - apply it to go backwards in time
+				const patch = dmp.patch_fromText(diffContent);
+				const result = dmp.patch_apply(patch, data);
+				data = result[0]; // result[0] is the patched text, result[1] is success array
+			}
+		}
+		
+		return data;
+	}
+	
+	/**
+	 * Extract only new content (insertions) from diff between old and new content
+	 */
+	private extractNewContent(oldContent: string, newContent: string): string {
+		const dmp = new diff_match_patch();
+		const diffs = dmp.diff_main(oldContent, newContent);
+		dmp.diff_cleanupSemantic(diffs);
+		
+		// Extract only insertions (DiffOp.Insert = 1)
+		const newContentParts: string[] = [];
+		for (const [op, text] of diffs) {
+			if (op === 1) { // Insert operation
+				newContentParts.push(text);
+			}
+		}
+		
+		return newContentParts.join('');
+	}
+	
+	private async extractContentChanges(file: TFile, currentContent: string): Promise<string> {
+		// Calculate the date threshold based on filterDate
+		const threshold = this.getDateThreshold();
+		if (!threshold) {
+			return "";
+		}
+		
+		try {
+			// Find the .edtz file for this note - Edit History appends .edtz to the full filename
+			const edtzPath = file.path + '.edtz';
+			const edtzFile = this.app.vault.getAbstractFileByPath(edtzPath);
+			
+			if (!(edtzFile instanceof TFile)) {
+				// No edit history file - check if file is new since threshold
+				if (new Date(file.stat.ctime) >= threshold) {
+					return cleanUpNoteContents(currentContent, getFrontMatterInfo(currentContent).exists);
+				}
+				return "";
+			}
+			
+			// Read the .edtz ZIP file
+			const arrayBuffer = await this.app.vault.readBinary(edtzFile);
+			const zip = await JSZip.loadAsync(arrayBuffer);
+			
+			// Extract all ZIP entries with their timestamps from filenames
+			// The filename contains the exact UTC epoch in base-36 encoding
+			const entries: Array<{name: string, timestamp: number, isFull: boolean, zipEntry: JSZip.JSZipObject}> = [];
+			zip.forEach((relativePath, zipEntry) => {
+				if (!zipEntry.dir) {
+					const isFull = this.isFullVersion(relativePath);
+					const timestamp = this.parseEditEpoch(relativePath);
+					
+					entries.push({ name: relativePath, timestamp, isFull, zipEntry });
+				}
+			});
+			
+			if (entries.length === 0) {
+				// Empty edit history file
+				return "";
+			}
+			
+			// Sort by timestamp (oldest first)
+			entries.sort((a, b) => a.timestamp - b.timestamp);
+			
+			const thresholdMs = threshold.getTime();
+			
+			// Find the latest stored version (should be the last entry, which is stored in full)
+			const latestEntry = entries[entries.length - 1];
+			if (!latestEntry.isFull) {
+				console.warn(`[extractContentChanges] Latest entry is not stored in full, this shouldn't happen`);
+			}
+			
+			const dmp = new diff_match_patch();
+			const latestStoredContent = await latestEntry.zipEntry.async("string");
+			
+			// Check if there are any edits after the threshold
+			const editsAfterThreshold = entries.filter(e => e.timestamp > thresholdMs);
+			if (editsAfterThreshold.length === 0) {
+				// No edits after threshold - return empty
+				return "";
+			}
+			
+			// Reconstruct file state at threshold by going backwards from latest stored version
+			const stateAtThreshold = await this.reconstructFileAtTime(
+				zip,
+				entries,
+				thresholdMs,
+				latestStoredContent
+			);
+			
+			// Check if current file has changes not yet stored in .edtz
+			// Compare latest stored version with current content
+			const currentDiff = dmp.diff_main(latestStoredContent, currentContent);
+			const hasUnstoredChanges = currentDiff.some(([op]) => op !== 0); // Any non-equal operations
+			
+			// Calculate final state to compare against
+			const finalState = hasUnstoredChanges ? currentContent : latestStoredContent;
+			
+			// Extract only new content (insertions) added after threshold
+			const newContent = this.extractNewContent(stateAtThreshold, finalState);
+			
+			// Clean up the content (remove frontmatter if needed)
+			const hasFrontMatter = getFrontMatterInfo(newContent).exists;
+			return cleanUpNoteContents(newContent, hasFrontMatter);
+			
+		} catch (error) {
+			console.error(`[extractContentChanges] Error extracting changes from ${file.path}:`, error);
+			return "";
+		}
+	}
+	
+	private getDateThreshold(): Date | null {
+		if (this.filterDate === "any") return null;
+		
+		if (this.filterDate === "last-quiz") {
+			return this.getLastQuizGenerationDate();
+		}
+		
+		// Parse days from filterDate (supports fractional days for hours)
+		const days = parseFloat(this.filterDate);
+		if (isNaN(days)) return null;
+		
+		// Calculate milliseconds ago
+		const msAgo = days * 24 * 60 * 60 * 1000;
+		const threshold = new Date(Date.now() - msAgo);
+		return threshold;
 	}
 
 	private async applyAutoTags(): Promise<void> {

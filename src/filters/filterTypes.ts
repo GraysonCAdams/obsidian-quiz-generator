@@ -116,5 +116,9 @@ export interface FilterBookmark {
 	removeFilteredTags?: boolean;
 	// Auto-select matching
 	autoSelectMatching?: boolean;
+	// Backlinks
+	includeBacklinks?: boolean;
+	// Content selection
+	contentSelectionMode?: string;
 }
 

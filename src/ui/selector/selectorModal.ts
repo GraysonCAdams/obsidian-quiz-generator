@@ -1506,6 +1506,8 @@ export default class SelectorModal extends Modal {
 		const dmp = new diff_match_patch();
 		let data = latestStoredContent;
 		
+		console.log(`[reconstructFileAtTime] Starting reconstruction, threshold: ${new Date(thresholdMs).toLocaleString()}, latest content length: ${data.length}`);
+		
 		// Process entries from newest to oldest (reverse order)
 		// We want to go back in time to the threshold
 		// Edits with timestamp > threshold should be undone (applied backwards)
@@ -1513,9 +1515,12 @@ export default class SelectorModal extends Modal {
 		for (let i = entries.length - 1; i >= 0; i--) {
 			const entry = entries[i];
 			
+			console.log(`[reconstructFileAtTime] Processing entry ${i}: ${new Date(entry.timestamp).toLocaleString()} (${entry.timestamp}), isFull: ${entry.isFull}, threshold: ${thresholdMs}`);
+			
 			// Stop if we've reached threshold or gone past it
 			// Edits at threshold or before should remain as-is
 			if (entry.timestamp <= thresholdMs) {
+				console.log(`[reconstructFileAtTime] Entry ${i} is at or before threshold, stopping reconstruction`);
 				break;
 			}
 			
@@ -1529,23 +1534,29 @@ export default class SelectorModal extends Modal {
 				// If it's after threshold, use it as starting point and continue going back
 				// If it's at or before threshold, use it directly and stop
 				if (entry.timestamp > thresholdMs) {
+					console.log(`[reconstructFileAtTime] Entry ${i} is full version after threshold, using as starting point and continuing`);
 					// Use this as starting point, but we still need to apply older patches
 					// that are after threshold (though typically the latest is the only one after threshold)
 					data = diffContent;
+					console.log(`[reconstructFileAtTime] Data length after setting full version: ${data.length}`);
 					// Continue processing older entries
 				} else {
 					// This full version is at or before threshold, use it directly
+					console.log(`[reconstructFileAtTime] Entry ${i} is full version at/before threshold, using directly and stopping`);
 					data = diffContent;
 					break;
 				}
 			} else {
 				// Patch - apply it to go backwards in time
+				console.log(`[reconstructFileAtTime] Entry ${i} is patch, applying backwards. Patch length: ${diffContent.length}, data length before: ${data.length}`);
 				const patch = dmp.patch_fromText(diffContent);
 				const result = dmp.patch_apply(patch, data);
 				data = result[0]; // result[0] is the patched text, result[1] is success array
+				console.log(`[reconstructFileAtTime] Data length after applying patch: ${data.length}, patch success: ${result[1].every(x => x)}`);
 			}
 		}
 		
+		console.log(`[reconstructFileAtTime] Reconstruction complete, final data length: ${data.length}`);
 		return data;
 	}
 	
@@ -1557,6 +1568,15 @@ export default class SelectorModal extends Modal {
 		const diffs = dmp.diff_main(oldContent, newContent);
 		dmp.diff_cleanupSemantic(diffs);
 		
+		console.log(`[extractNewContent] Old content length: ${oldContent.length}, new content length: ${newContent.length}`);
+		console.log(`[extractNewContent] Total diff operations: ${diffs.length}`);
+		
+		const insertOps = diffs.filter(([op]) => op === 1);
+		const deleteOps = diffs.filter(([op]) => op === -1);
+		const equalOps = diffs.filter(([op]) => op === 0);
+		
+		console.log(`[extractNewContent] Insert operations: ${insertOps.length}, Delete operations: ${deleteOps.length}, Equal operations: ${equalOps.length}`);
+		
 		// Extract only insertions (DiffOp.Insert = 1)
 		const newContentParts: string[] = [];
 		for (const [op, text] of diffs) {
@@ -1565,7 +1585,13 @@ export default class SelectorModal extends Modal {
 			}
 		}
 		
-		return newContentParts.join('');
+		const extracted = newContentParts.join('');
+		console.log(`[extractNewContent] Extracted content length: ${extracted.length}`);
+		if (extracted.length > 0) {
+			console.log(`[extractNewContent] Extracted content preview: ${extracted.substring(0, 200)}...`);
+		}
+		
+		return extracted;
 	}
 	
 	private async extractContentChanges(file: TFile, currentContent: string): Promise<string> {
@@ -1614,23 +1640,38 @@ export default class SelectorModal extends Modal {
 			
 			const thresholdMs = threshold.getTime();
 			
+			console.log(`[extractContentChanges] ${file.basename} - Threshold: ${new Date(thresholdMs).toLocaleString()} (${thresholdMs})`);
+			console.log(`[extractContentChanges] ${file.basename} - Current time: ${new Date().toLocaleString()} (${Date.now()})`);
+			
 			// Find the latest stored version (should be the last entry, which is stored in full)
 			const latestEntry = entries[entries.length - 1];
 			if (!latestEntry.isFull) {
 				console.warn(`[extractContentChanges] Latest entry is not stored in full, this shouldn't happen`);
 			}
 			
+			console.log(`[extractContentChanges] ${file.basename} - Latest entry timestamp: ${new Date(latestEntry.timestamp).toLocaleString()} (${latestEntry.timestamp})`);
+			
 			const dmp = new diff_match_patch();
 			const latestStoredContent = await latestEntry.zipEntry.async("string");
 			
+			console.log(`[extractContentChanges] ${file.basename} - Latest stored content length: ${latestStoredContent.length}`);
+			console.log(`[extractContentChanges] ${file.basename} - Current content length: ${currentContent.length}`);
+			
 			// Check if there are any edits after the threshold
 			const editsAfterThreshold = entries.filter(e => e.timestamp > thresholdMs);
+			console.log(`[extractContentChanges] ${file.basename} - Edits after threshold: ${editsAfterThreshold.length}`);
+			editsAfterThreshold.forEach((e, i) => {
+				console.log(`[extractContentChanges] ${file.basename} - Edit ${i} after threshold: ${new Date(e.timestamp).toLocaleString()} (${e.timestamp}) (${e.isFull ? 'FULL' : 'diff'})`);
+			});
+			
 			if (editsAfterThreshold.length === 0) {
 				// No edits after threshold - return empty
+				console.log(`[extractContentChanges] ${file.basename} - No edits after threshold, returning empty`);
 				return "";
 			}
 			
 			// Reconstruct file state at threshold by going backwards from latest stored version
+			console.log(`[extractContentChanges] ${file.basename} - Reconstructing state at threshold...`);
 			const stateAtThreshold = await this.reconstructFileAtTime(
 				zip,
 				entries,
@@ -1638,20 +1679,42 @@ export default class SelectorModal extends Modal {
 				latestStoredContent
 			);
 			
+			console.log(`[extractContentChanges] ${file.basename} - State at threshold length: ${stateAtThreshold.length}`);
+			console.log(`[extractContentChanges] ${file.basename} - State at threshold preview: ${stateAtThreshold.substring(0, 100)}...`);
+			
 			// Check if current file has changes not yet stored in .edtz
 			// Compare latest stored version with current content
 			const currentDiff = dmp.diff_main(latestStoredContent, currentContent);
 			const hasUnstoredChanges = currentDiff.some(([op]) => op !== 0); // Any non-equal operations
 			
+			console.log(`[extractContentChanges] ${file.basename} - Has unstored changes: ${hasUnstoredChanges}`);
+			if (hasUnstoredChanges) {
+				const unstoredDiffs = currentDiff.filter(([op]) => op !== 0);
+				console.log(`[extractContentChanges] ${file.basename} - Unstored diff operations: ${unstoredDiffs.length}`);
+				const unstoredInserts = currentDiff.filter(([op]) => op === 1);
+				const unstoredDeletes = currentDiff.filter(([op]) => op === -1);
+				console.log(`[extractContentChanges] ${file.basename} - Unstored inserts: ${unstoredInserts.length}, deletes: ${unstoredDeletes.length}`);
+			}
+			
 			// Calculate final state to compare against
 			const finalState = hasUnstoredChanges ? currentContent : latestStoredContent;
+			console.log(`[extractContentChanges] ${file.basename} - Final state length: ${finalState.length}`);
 			
 			// Extract only new content (insertions) added after threshold
+			console.log(`[extractContentChanges] ${file.basename} - Extracting new content from diff...`);
 			const newContent = this.extractNewContent(stateAtThreshold, finalState);
+			
+			console.log(`[extractContentChanges] ${file.basename} - New content extracted length: ${newContent.length}`);
+			if (newContent.length > 0) {
+				console.log(`[extractContentChanges] ${file.basename} - New content preview: ${newContent.substring(0, 200)}...`);
+			}
 			
 			// Clean up the content (remove frontmatter if needed)
 			const hasFrontMatter = getFrontMatterInfo(newContent).exists;
-			return cleanUpNoteContents(newContent, hasFrontMatter);
+			const cleanedContent = cleanUpNoteContents(newContent, hasFrontMatter);
+			console.log(`[extractContentChanges] ${file.basename} - Cleaned content length: ${cleanedContent.length}`);
+			
+			return cleanedContent;
 			
 		} catch (error) {
 			console.error(`[extractContentChanges] Error extracting changes from ${file.path}:`, error);

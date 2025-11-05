@@ -1504,55 +1504,63 @@ export default class SelectorModal extends Modal {
 		latestStoredContent: string
 	): Promise<string> {
 		const dmp = new diff_match_patch();
+		
+		console.log(`[reconstructFileAtTime] Starting reconstruction, threshold: ${new Date(thresholdMs).toLocaleString()}, latest content length: ${latestStoredContent.length}`);
+		
+		// Find the last entry at or before threshold - this will be our base state
+		let lastEntryBeforeThreshold: {name: string, timestamp: number, isFull: boolean, zipEntry: JSZip.JSZipObject} | null = null;
+		for (let i = entries.length - 1; i >= 0; i--) {
+			const entry = entries[i];
+			if (entry.timestamp <= thresholdMs) {
+				lastEntryBeforeThreshold = entry;
+				console.log(`[reconstructFileAtTime] Found last entry at or before threshold: entry ${i} at ${new Date(entry.timestamp).toLocaleString()}`);
+				break;
+			}
+		}
+		
+		// If no entry at or before threshold exists, all entries are after threshold
+		// In this case, the state at threshold is empty (file didn't exist or was empty)
+		if (!lastEntryBeforeThreshold) {
+			console.log(`[reconstructFileAtTime] No entry at or before threshold, returning empty state`);
+			return "";
+		}
+		
+		// Reconstruct state at the last entry before threshold
+		// Start from the latest entry and apply patches backwards until we reach lastEntryBeforeThreshold
 		let data = latestStoredContent;
 		
-		console.log(`[reconstructFileAtTime] Starting reconstruction, threshold: ${new Date(thresholdMs).toLocaleString()}, latest content length: ${data.length}`);
-		
 		// Process entries from newest to oldest (reverse order)
-		// We want to go back in time to the threshold
-		// Edits with timestamp > threshold should be undone (applied backwards)
-		// Edits with timestamp <= threshold should remain (we stop processing)
+		// We want to go back in time from the latest entry to the last entry before threshold
 		for (let i = entries.length - 1; i >= 0; i--) {
 			const entry = entries[i];
 			
-			console.log(`[reconstructFileAtTime] Processing entry ${i}: ${new Date(entry.timestamp).toLocaleString()} (${entry.timestamp}), isFull: ${entry.isFull}, threshold: ${thresholdMs}`);
-			
-			// Stop if we've reached threshold or gone past it
-			// Edits at threshold or before should remain as-is
-			if (entry.timestamp <= thresholdMs) {
-				console.log(`[reconstructFileAtTime] Entry ${i} is at or before threshold, stopping reconstruction`);
-				break;
-			}
+			console.log(`[reconstructFileAtTime] Processing entry ${i}: ${new Date(entry.timestamp).toLocaleString()} (${entry.timestamp}), isFull: ${entry.isFull}`);
 			
 			// Apply this edit backwards (patch goes newer -> older, so applying it goes back in time)
 			const diffContent = await entry.zipEntry.async("string");
 			
 			if (entry.isFull) {
 				// Full version stored - this is the state at this timestamp
-				// The latest entry is always stored in full, so this should only happen
-				// for the first entry we process (the latest)
-				// If it's after threshold, use it as starting point and continue going back
-				// If it's at or before threshold, use it directly and stop
-				if (entry.timestamp > thresholdMs) {
-					console.log(`[reconstructFileAtTime] Entry ${i} is full version after threshold, using as starting point and continuing`);
-					// Use this as starting point, but we still need to apply older patches
-					// that are after threshold (though typically the latest is the only one after threshold)
-					data = diffContent;
-					console.log(`[reconstructFileAtTime] Data length after setting full version: ${data.length}`);
-					// Continue processing older entries
-				} else {
-					// This full version is at or before threshold, use it directly
-					console.log(`[reconstructFileAtTime] Entry ${i} is full version at/before threshold, using directly and stopping`);
-					data = diffContent;
-					break;
-				}
+				// Use it as the starting point for applying older patches
+				console.log(`[reconstructFileAtTime] Entry ${i} is full version, using as starting point`);
+				data = diffContent;
+				console.log(`[reconstructFileAtTime] Data length after setting full version: ${data.length}`);
 			} else {
 				// Patch - apply it to go backwards in time
 				console.log(`[reconstructFileAtTime] Entry ${i} is patch, applying backwards. Patch length: ${diffContent.length}, data length before: ${data.length}`);
 				const patch = dmp.patch_fromText(diffContent);
 				const result = dmp.patch_apply(patch, data);
+				if (!result[1].every(x => x)) {
+					console.warn(`[reconstructFileAtTime] Some patches failed to apply`);
+				}
 				data = result[0]; // result[0] is the patched text, result[1] is success array
 				console.log(`[reconstructFileAtTime] Data length after applying patch: ${data.length}, patch success: ${result[1].every(x => x)}`);
+			}
+			
+			// Stop after we've processed the last entry at or before threshold
+			if (entry.timestamp <= thresholdMs) {
+				console.log(`[reconstructFileAtTime] Reached entry at or before threshold, stopping. Final state is at ${new Date(entry.timestamp).toLocaleString()}`);
+				break;
 			}
 		}
 		
@@ -1664,24 +1672,6 @@ export default class SelectorModal extends Modal {
 				console.log(`[extractContentChanges] ${file.basename} - Edit ${i} after threshold: ${new Date(e.timestamp).toLocaleString()} (${e.timestamp}) (${e.isFull ? 'FULL' : 'diff'})`);
 			});
 			
-			if (editsAfterThreshold.length === 0) {
-				// No edits after threshold - return empty
-				console.log(`[extractContentChanges] ${file.basename} - No edits after threshold, returning empty`);
-				return "";
-			}
-			
-			// Reconstruct file state at threshold by going backwards from latest stored version
-			console.log(`[extractContentChanges] ${file.basename} - Reconstructing state at threshold...`);
-			const stateAtThreshold = await this.reconstructFileAtTime(
-				zip,
-				entries,
-				thresholdMs,
-				latestStoredContent
-			);
-			
-			console.log(`[extractContentChanges] ${file.basename} - State at threshold length: ${stateAtThreshold.length}`);
-			console.log(`[extractContentChanges] ${file.basename} - State at threshold preview: ${stateAtThreshold.substring(0, 100)}...`);
-			
 			// Check if current file has changes not yet stored in .edtz
 			// Compare latest stored version with current content
 			const currentDiff = dmp.diff_main(latestStoredContent, currentContent);
@@ -1695,6 +1685,51 @@ export default class SelectorModal extends Modal {
 				const unstoredDeletes = currentDiff.filter(([op]) => op === -1);
 				console.log(`[extractContentChanges] ${file.basename} - Unstored inserts: ${unstoredInserts.length}, deletes: ${unstoredDeletes.length}`);
 			}
+			
+			// Check if file modification time is after threshold (indicating unstored changes after threshold)
+			const fileModTime = file.stat.mtime;
+			const hasRecentModifications = fileModTime > thresholdMs;
+			console.log(`[extractContentChanges] ${file.basename} - File mod time: ${new Date(fileModTime).toLocaleString()} (${fileModTime}), after threshold: ${hasRecentModifications}`);
+			
+			// Only return empty if there are no edits after threshold AND no unstored changes after threshold
+			if (editsAfterThreshold.length === 0 && !hasUnstoredChanges) {
+				// No edits after threshold and no unstored changes - return empty
+				console.log(`[extractContentChanges] ${file.basename} - No edits after threshold and no unstored changes, returning empty`);
+				return "";
+			}
+			
+			// If there are no edits in .edtz after threshold but there are unstored changes,
+			// we still need to process them. Check if unstored changes happened after threshold.
+			if (editsAfterThreshold.length === 0 && hasUnstoredChanges) {
+				// If file was modified after threshold, we should process unstored changes
+				// Otherwise, the unstored changes happened before threshold, so return empty
+				if (!hasRecentModifications) {
+					console.log(`[extractContentChanges] ${file.basename} - Has unstored changes but file mod time is before threshold, returning empty`);
+					return "";
+				}
+				console.log(`[extractContentChanges] ${file.basename} - No edits in .edtz after threshold, but file has unstored changes after threshold, processing...`);
+			}
+			
+			// Reconstruct file state at threshold by going backwards from latest stored version
+			// If the latest entry is before or at threshold, we can use it directly as the state at threshold
+			let stateAtThreshold: string;
+			if (latestEntry.timestamp <= thresholdMs) {
+				// Latest entry is at or before threshold, so state at threshold is the latest stored content
+				console.log(`[extractContentChanges] ${file.basename} - Latest entry is at or before threshold, using latest stored content as state at threshold`);
+				stateAtThreshold = latestStoredContent;
+			} else {
+				// Latest entry is after threshold, need to reconstruct backwards to threshold
+				console.log(`[extractContentChanges] ${file.basename} - Reconstructing state at threshold...`);
+				stateAtThreshold = await this.reconstructFileAtTime(
+					zip,
+					entries,
+					thresholdMs,
+					latestStoredContent
+				);
+			}
+			
+			console.log(`[extractContentChanges] ${file.basename} - State at threshold length: ${stateAtThreshold.length}`);
+			console.log(`[extractContentChanges] ${file.basename} - State at threshold preview: ${stateAtThreshold.substring(0, 100)}...`);
 			
 			// Calculate final state to compare against
 			const finalState = hasUnstoredChanges ? currentContent : latestStoredContent;

@@ -1,4 +1,4 @@
-import { App, getFrontMatterInfo, Modal, Notice, Scope, setIcon, Setting, TAbstractFile, TFile, TFolder, Vault } from "obsidian";
+import { App, Component, getFrontMatterInfo, MarkdownRenderer, Modal, Notice, Scope, setIcon, setTooltip, Setting, TAbstractFile, TFile, TFolder, Vault } from "obsidian";
 import { QuizSettings } from "../../settings/config";
 import { Question, Quiz } from "../../utils/types";
 import {
@@ -52,6 +52,7 @@ export default class SelectorModal extends Modal {
 	private readonly tokenContainer: HTMLSpanElement;
 	private promptTokens: number = 0;
 	private readonly buttonMap: Record<SelectorModalButton, HTMLButtonElement>;
+	private readonly MIN_TOKENS_FOR_QUIZ = 100; // Minimum tokens needed for a 3-5 question quiz
 	private quiz: QuizModalLogic | undefined;
 	private autoTagEnabled: boolean = false;
 	private autoTags: string = "";
@@ -66,6 +67,9 @@ export default class SelectorModal extends Modal {
 	private selectedFilesContainer: HTMLDivElement | null = null;
 	private advancedFiltersContainer: HTMLDivElement | null = null;
 	private actionLink: HTMLAnchorElement | null = null;
+	private selectedFilesHeader: HTMLDivElement | null = null;
+	private activePreviewPopover: HTMLElement | null = null;
+	private activePopoverClickOutsideHandler: ((event: MouseEvent) => void) | null = null;
 	private removeTagsCheckbox: HTMLInputElement | null = null;
 	private clearSearchBtn: HTMLAnchorElement | null = null;
 	private showAdvanced: boolean = false;
@@ -83,6 +87,7 @@ export default class SelectorModal extends Modal {
 	private needsRecalculation: boolean = false;
 	private preparedContent: Map<string, string> = new Map(); // Cache prepared content
 	private noteTokenElements: Map<string, HTMLElement> = new Map(); // Store token display elements
+	private noteItemContainers: Map<string, HTMLElement> = new Map(); // Store item containers for styling updates
 
 	constructor(app: App, plugin: QuizGenerator, initialFiles?: TFile[], bookmarkId?: string) {
 		super(app);
@@ -94,6 +99,7 @@ export default class SelectorModal extends Modal {
 		this.scope.register([], "Escape", () => this.close());
 
 		this.modalEl.addClass("modal-qg");
+		this.modalEl.addClass("selector-modal-qg");
 		this.contentEl.addClass("modal-content-qg");
 		this.titleEl.addClass("modal-title-qg");
 		this.titleEl.setText("Select Notes for Quiz");
@@ -101,19 +107,22 @@ export default class SelectorModal extends Modal {
 		// Search bar
 		this.renderSearchBar();
 
-		// Main container with divider
+		// Main container with two columns
 		this.itemContainer = this.contentEl.createDiv("item-container-qg");
 		
-		// Search results section (above divider)
-		this.searchResultsContainer = this.itemContainer.createDiv("search-results-section-qg");
+		// Left column: Search results
+		const leftColumn = this.itemContainer.createDiv("column-left-qg");
+		this.searchResultsContainer = leftColumn.createDiv("search-results-section-qg");
 		this.searchResultsContainer.style.display = "none";
 		
-		// Divider with action link
-		const divider = this.itemContainer.createDiv("selection-divider-qg");
-		divider.createEl("span", { text: "Selected Notes" });
+		// Right column: Selected files
+		const rightColumn = this.itemContainer.createDiv("column-right-qg");
+		
+		// Header with action link (Deselect all)
+		this.selectedFilesHeader = rightColumn.createDiv("selected-files-header-qg");
 		
 		// Add action link (either "Deselect all" or "Reset filters")
-		this.actionLink = divider.createEl("a", { 
+		this.actionLink = this.selectedFilesHeader.createEl("a", { 
 			cls: "selection-action-link-qg",
 			text: "Deselect all"
 		});
@@ -121,8 +130,8 @@ export default class SelectorModal extends Modal {
 			this.handleActionLinkClick();
 		});
 		
-		// Selected files section (below divider)
-		this.selectedFilesContainer = this.itemContainer.createDiv("selected-files-section-qg");
+		// Selected files section
+		this.selectedFilesContainer = rightColumn.createDiv("selected-files-section-qg");
 		
 		// Content selection UI
 		this.renderContentSelectionUI();
@@ -136,6 +145,9 @@ export default class SelectorModal extends Modal {
 		this.tokenContainer = this.contentEl.createSpan("prompt-tokens-qg");
 		this.tokenContainer.textContent = `0 notes selected  •  Prompt tokens: ${this.promptTokens}`;
 		this.buttonMap = this.activateButtons();
+		
+		// Set initial button state
+		this.updateGeneratorButtonState();
 
 		// Add initial files if provided
 		if (initialFiles && initialFiles.length > 0) {
@@ -170,7 +182,11 @@ export default class SelectorModal extends Modal {
 		const openQuizHandler = async (): Promise<void> => await this.quiz?.renderQuiz();
 		const generateQuizHandler = async (): Promise<void> => {
 			if (!this.validGenerationSettings()) {
-				new Notice("Invalid generation settings or prompt contains 0 tokens");
+				if (this.promptTokens < this.MIN_TOKENS_FOR_QUIZ) {
+					new Notice(`Not enough content. Minimum ${this.MIN_TOKENS_FOR_QUIZ} tokens required for a 3-5 question quiz. Current: ${this.promptTokens} tokens.`);
+				} else {
+					new Notice("Invalid generation settings or insufficient tokens");
+				}
 				return;
 			}
 
@@ -270,6 +286,8 @@ export default class SelectorModal extends Modal {
 				new Notice((error as Error).message, 0);
 			} finally {
 				this.toggleButtons([SelectorModalButton.GENERATE], false);
+				// Update button state after re-enabling (will disable again if not enough tokens)
+				this.updateGeneratorButtonState();
 			}
 		};
 
@@ -296,9 +314,18 @@ export default class SelectorModal extends Modal {
 	}
 
 	private updateActionLink(): void {
-		if (!this.actionLink) return;
+		if (!this.actionLink || !this.selectedFilesHeader) return;
 
-		this.actionLink.textContent = this.autoSelectMatching ? "Reset filters" : "Deselect all";
+		const hasSelectedItems = this.selectedNotes.size > 0;
+		
+		// Show/hide entire header banner based on whether there are selected items
+		if (hasSelectedItems) {
+			this.selectedFilesHeader.style.display = "";
+			this.actionLink.style.display = "";
+			this.actionLink.textContent = this.autoSelectMatching ? "Reset filters" : "Deselect all";
+		} else {
+			this.selectedFilesHeader.style.display = "none";
+		}
 	}
 
 	private updateRemoveTagsCheckboxState(): void {
@@ -418,10 +445,12 @@ export default class SelectorModal extends Modal {
 	}
 
 	private async performSearch(): Promise<void> {
-		// If no search query and no advanced filters, hide results
+		// If no search query and no advanced filters, show empty state
 		if (!this.searchQuery.trim() && !this.filterTag && !this.filterFolder && this.filterDate === "any") {
-			this.searchResultsContainer!.style.display = "none";
 			this.searchResultsContainer!.empty();
+			this.searchResultsContainer!.style.display = "block";
+			const emptyMessage = this.searchResultsContainer!.createDiv("search-results-empty-qg");
+			emptyMessage.textContent = "No notes found or currently unselected";
 			return;
 		}
 
@@ -544,23 +573,65 @@ export default class SelectorModal extends Modal {
 			}
 		}
 
+		// Filter out files with 0 tokens from search results
+		const filesWithTokens = await Promise.all(
+			matchingFiles.map(async (file) => {
+				// Check if file has tokens
+				let tokens = 0;
+				
+				// If file is already selected, check preparedContent or selectedNotes
+				if (this.selectedNoteFiles.has(file.path)) {
+					const content = this.selectedNotes.get(file.path);
+					if (content !== undefined) {
+						tokens = countNoteTokens(content);
+					}
+				} else {
+					// For unselected files, check if they would have tokens in current mode
+					if (this.contentSelectionMode === ContentSelectionMode.CHANGES_ONLY && this.filterDate !== "any") {
+						// In changes mode, calculate tokens by extracting content changes
+						// This ensures we hide files with 0 tokens even if they haven't been selected yet
+						try {
+							const noteContents = await this.app.vault.cachedRead(file);
+							const contentChanges = await this.extractContentChanges(file, noteContents);
+							tokens = countNoteTokens(contentChanges);
+						} catch (error) {
+							// If extraction fails, assume 0 tokens
+							tokens = 0;
+						}
+					} else {
+						// Full page mode - read file and check tokens
+						try {
+							const noteContents = await this.app.vault.cachedRead(file);
+							const contentToStore = cleanUpNoteContents(noteContents, getFrontMatterInfo(noteContents).exists);
+							tokens = countNoteTokens(contentToStore);
+						} catch (error) {
+							tokens = 0;
+						}
+					}
+				}
+				
+				return { file, tokens };
+			})
+		);
+		
+		// Filter out files with 0 tokens
+		const filesWithNonZeroTokens = filesWithTokens
+			.filter(({ tokens }) => tokens > 0)
+			.map(({ file }) => file);
+		
 		// Display search results (limit to first 20 for UI)
-		const displayFiles = this.autoSelectMatching ? [] : matchingFiles.slice(0, 20);
+		const displayFiles = this.autoSelectMatching ? [] : filesWithNonZeroTokens.slice(0, 20);
 		
 		this.searchResultsContainer!.empty();
 		
-		if (this.autoSelectMatching && matchingFiles.length > 0) {
+		if (this.autoSelectMatching && filesWithNonZeroTokens.length > 0) {
 			// Show message when auto-selecting
 			this.searchResultsContainer!.style.display = "block";
 			const header = this.searchResultsContainer!.createDiv("search-results-header-qg");
-			header.textContent = `Auto-selected ${matchingFiles.length} note${matchingFiles.length !== 1 ? 's' : ''} matching criteria`;
+			header.textContent = `Auto-selected ${filesWithNonZeroTokens.length} note${filesWithNonZeroTokens.length !== 1 ? 's' : ''} matching criteria`;
 		} else if (!this.autoSelectMatching && displayFiles.length > 0) {
-			// Only show "Click notes below" message when auto-select is OFF
+			// Show search results
 			this.searchResultsContainer!.style.display = "block";
-			
-			// Add header message
-			const header = this.searchResultsContainer!.createDiv("search-results-header-qg");
-			header.textContent = "Click notes below to add them to your selection:";
 			
 			displayFiles.forEach(file => {
 				const resultItem = this.searchResultsContainer!.createDiv("search-result-item-qg");
@@ -600,8 +671,16 @@ export default class SelectorModal extends Modal {
 				await this.performSearch(); // Refresh search results
 			});
 			});
+		} else if (!this.autoSelectMatching && filesWithNonZeroTokens.length > 0 && displayFiles.length === 0) {
+			// Show message if there are files with tokens but they're beyond the display limit
+			this.searchResultsContainer!.style.display = "block";
+			const message = this.searchResultsContainer!.createDiv("search-results-header-qg");
+			message.textContent = `${filesWithNonZeroTokens.length} note${filesWithNonZeroTokens.length !== 1 ? 's' : ''} with content found (showing first 20)`;
 		} else {
-			this.searchResultsContainer!.style.display = "none";
+			// Show empty state message when no search results
+			this.searchResultsContainer!.style.display = "block";
+			const emptyMessage = this.searchResultsContainer!.createDiv("search-results-empty-qg");
+			emptyMessage.textContent = "No notes found or currently unselected";
 		}
 	}
 
@@ -672,6 +751,9 @@ export default class SelectorModal extends Modal {
 		// Get all resolved links in the vault
 		const resolvedLinks = this.app.metadataCache.resolvedLinks;
 		
+		// Check if we're in changes mode
+		const isChangesMode = this.contentSelectionMode === ContentSelectionMode.CHANGES_ONLY && this.filterDate !== "any";
+		
 		// Iterate through all selected note files
 		for (const files of this.selectedNoteFiles.values()) {
 			for (const file of files) {
@@ -692,9 +774,27 @@ export default class SelectorModal extends Modal {
 					if (!(backlinkFile instanceof TFile)) continue;
 					
 					try {
-						const content = await this.app.vault.read(backlinkFile);
-						const hasFrontMatter = getFrontMatterInfo(content).exists;
-						backlinkContents.push(cleanUpNoteContents(content, hasFrontMatter));
+						let content: string;
+						
+						if (isChangesMode) {
+							// In changes mode, extract only recent changes
+							const currentContent = await this.app.vault.cachedRead(backlinkFile);
+							content = await this.extractContentChanges(backlinkFile, currentContent);
+							
+							// Only include backlinks that have recent changes (non-empty content)
+							if (content.trim().length === 0) {
+								console.log(`[collectBacklinkContents] Skipping ${backlinkFile.basename} - no recent changes`);
+								processedFiles.add(sourcePath); // Mark as processed so we don't try again
+								continue;
+							}
+						} else {
+							// In full content mode, include all content
+							const fullContent = await this.app.vault.read(backlinkFile);
+							const hasFrontMatter = getFrontMatterInfo(fullContent).exists;
+							content = cleanUpNoteContents(fullContent, hasFrontMatter);
+						}
+						
+						backlinkContents.push(content);
 						processedFiles.add(sourcePath);
 					} catch (error) {
 						console.error(`Error reading backlink file ${sourcePath}:`, error);
@@ -731,6 +831,7 @@ export default class SelectorModal extends Modal {
 		this.selectedNoteFiles.clear();
 		this.preparedContent.clear();
 		this.noteTokenElements.clear();
+		this.noteItemContainers.clear();
 		this.selectedFilesContainer?.empty();
 		this.updatePromptTokens(0);
 		this.notePaths = this.app.vault.getMarkdownFiles().map(file => file.path);
@@ -835,8 +936,13 @@ export default class SelectorModal extends Modal {
 		autoSelectCheckbox.addEventListener("change", async (e) => {
 			this.autoSelectMatching = (e.target as HTMLInputElement).checked;
 			this.updateActionLink();
+			
 			if (this.autoSelectMatching) {
 				// When enabled, apply auto-selection immediately
+				await this.performSearch();
+			} else {
+				// When disabled, refresh search results to show all matching files
+				// This will also hide the "Auto-selected x notes" message
 				await this.performSearch();
 			}
 		});
@@ -852,32 +958,301 @@ export default class SelectorModal extends Modal {
 
 	private renderNoteOrFolder(item: TFile | TFolder, fileName: string): number {
 		const itemContainer = this.selectedFilesContainer!.createDiv("item-qg");
-		itemContainer.textContent = fileName;
+		
+		// Add checkmark icon to indicate selected status
+		const checkmarkIcon = itemContainer.createSpan("item-checkmark-qg");
+		setIcon(checkmarkIcon, "check");
+		
+		// Add file name
+		const fileNameSpan = itemContainer.createSpan("item-name-qg");
+		fileNameSpan.textContent = fileName;
 
 		const tokensElement = itemContainer.createDiv("item-tokens-qg");
 		const tokens = countNoteTokens(this.selectedNotes.get(item.path)!);
 		tokensElement.textContent = tokens + " tokens";
 		
-		// Store reference to token element for later updates
+		// Store reference to token element and container for later updates
 		this.noteTokenElements.set(item.path, tokensElement);
+		this.noteItemContainers.set(item.path, itemContainer);
+		
+		// Apply styling based on token count
+		this.updateItemStyling(item.path, tokens);
 
 		const viewContentsButton = itemContainer.createEl("button", "item-button-qg");
 		setIconAndTooltip(viewContentsButton, "eye", "View contents");
-		viewContentsButton.addEventListener("click", async (): Promise<void> => {
-			if (item instanceof TFile) {
-				// Pass prepared content if available, otherwise undefined (will show full note)
-				const preparedContent = this.preparedContent.get(item.path);
-				new NoteViewerModal(this.app, item, this.modalEl, preparedContent).open();
-			} else {
-				new FolderViewerModal(this.app, this.settings, this.modalEl, item).open();
+		
+		let popover: HTMLElement | null = null;
+		let popoverTimeout: NodeJS.Timeout | null = null;
+		let isPopoverPinned = false; // Track if popover is pinned by click
+		let handleClickOutside: ((event: MouseEvent) => void) | null = null;
+		
+		const showPopover = async (e?: Event): Promise<void> => {
+			// Prevent event bubbling to avoid triggering mouseleave
+			if (e) {
+				e.stopPropagation();
+				e.preventDefault();
 			}
-		});
+			
+			// Close any existing active popover from other items
+			if (this.activePreviewPopover && this.activePreviewPopover !== popover) {
+				this.activePreviewPopover.style.display = "none";
+				if (this.activePopoverClickOutsideHandler) {
+					document.removeEventListener("click", this.activePopoverClickOutsideHandler);
+					this.activePopoverClickOutsideHandler = null;
+				}
+				this.activePreviewPopover = null;
+			}
+			
+			// Clear any pending timeout
+			if (popoverTimeout) {
+				clearTimeout(popoverTimeout);
+				popoverTimeout = null;
+			}
+			
+			// If popover already exists and is visible, hide it (toggle behavior)
+			if (popover && popover.style.display !== "none" && popover.style.display !== "") {
+				popover.style.display = "none";
+				isPopoverPinned = false;
+				// Remove click outside listener
+				if (handleClickOutside) {
+					document.removeEventListener("click", handleClickOutside);
+				}
+				// Clear active popover reference if this was the active one
+				if (this.activePreviewPopover === popover) {
+					this.activePreviewPopover = null;
+					this.activePopoverClickOutsideHandler = null;
+				}
+				return;
+			}
+			
+			// If popover exists but is hidden, refresh content and show it
+			if (popover) {
+				// Refresh content in case it changed (e.g., mode switch)
+				if (item instanceof TFile) {
+					const preparedContent = this.preparedContent.get(item.path);
+					const newContent = preparedContent !== undefined 
+						? preparedContent
+						: await this.app.vault.cachedRead(item);
+					const newTitle = preparedContent !== undefined 
+						? `${item.basename} (Prepared Content)`
+						: item.basename;
+					
+					// Update title if it changed
+					const titleEl = popover.querySelector(".content-preview-title-qg");
+					if (titleEl) {
+						titleEl.textContent = newTitle;
+					}
+					
+					// Update content
+					const contentArea = popover.querySelector(".content-preview-content-qg");
+					if (contentArea) {
+						contentArea.empty();
+						
+						// Show message if no prepared content
+						if (this.preparedContent.get(item.path) !== undefined && newContent.trim().length === 0) {
+							contentArea.createEl("p", { 
+								text: "No changes detected for the selected time period.",
+								cls: "no-content-message-qg"
+							});
+						} else {
+							// Show raw markdown content in a code block for reliable display
+							const codeBlock = contentArea.createEl("pre", { cls: "content-preview-markdown-qg" });
+							const codeEl = codeBlock.createEl("code", { 
+								cls: "language-markdown"
+							});
+							// Use textContent to preserve line breaks
+							codeEl.textContent = newContent;
+						}
+					}
+				}
+				
+				popover.style.display = "block";
+				isPopoverPinned = true;
+				// Set as active popover
+				this.activePreviewPopover = popover;
+				this.activePopoverClickOutsideHandler = handleClickOutside;
+				// Re-add click outside listener
+				if (handleClickOutside) {
+					setTimeout(() => {
+						document.addEventListener("click", handleClickOutside!);
+					}, 0);
+				}
+				return;
+			}
+			
+			// Create popover container
+			popover = document.body.createDiv("content-preview-popover-qg");
+			popover.style.display = "block"; // Ensure it's visible immediately
+			
+			// Get content
+			let content: string;
+			let title: string;
+			
+			if (item instanceof TFile) {
+				const preparedContent = this.preparedContent.get(item.path);
+				content = preparedContent !== undefined 
+					? preparedContent
+					: await this.app.vault.cachedRead(item);
+				title = preparedContent !== undefined 
+					? `${item.basename} (Prepared Content)`
+					: item.basename;
+			} else {
+				// For folders, we'll still use the modal for now
+				new FolderViewerModal(this.app, this.settings, this.modalEl, item).open();
+				popover.remove();
+				popover = null;
+				return;
+			}
+			
+			// Position popover near the button
+			const rect = viewContentsButton.getBoundingClientRect();
+			popover.style.position = "fixed";
+			
+			// Calculate position - prefer right side, but flip to left if not enough space
+			const popoverWidth = 500;
+			const spaceRight = window.innerWidth - rect.right;
+			const spaceLeft = rect.left;
+			
+			if (spaceRight >= popoverWidth + 20) {
+				// Place on the right
+				popover.style.left = `${rect.right + 10}px`;
+			} else if (spaceLeft >= popoverWidth + 20) {
+				// Place on the left
+				popover.style.left = `${rect.left - popoverWidth - 10}px`;
+			} else {
+				// Not enough space on either side, use right but constrain width
+				popover.style.left = `${rect.right + 10}px`;
+				popover.style.maxWidth = `${Math.max(300, spaceRight - 20)}px`;
+			}
+			
+			// Adjust vertical position if near bottom of screen
+			const popoverHeight = 600;
+			const spaceBelow = window.innerHeight - rect.top;
+			if (spaceBelow < popoverHeight) {
+				popover.style.top = `${Math.max(10, window.innerHeight - popoverHeight - 10)}px`;
+			} else {
+				popover.style.top = `${rect.top}px`;
+			}
+			
+			popover.style.maxWidth = "500px";
+			popover.style.maxHeight = "600px";
+			popover.style.zIndex = "10000";
+			
+			// Add title
+			const titleEl = popover.createEl("div", { cls: "content-preview-title-qg" });
+			titleEl.setText(title);
+			
+			// Add scrollable content area
+			const contentArea = popover.createDiv("content-preview-content-qg");
+			
+			// Show message if no prepared content
+			if (item instanceof TFile && this.preparedContent.get(item.path) !== undefined && content.trim().length === 0) {
+				contentArea.createEl("p", { 
+					text: "No changes detected for the selected time period.",
+					cls: "no-content-message-qg"
+				});
+			} else {
+				// Show raw markdown content in a code block for reliable display
+				const codeBlock = contentArea.createEl("pre", { cls: "content-preview-markdown-qg" });
+				const codeEl = codeBlock.createEl("code", { 
+					cls: "language-markdown"
+				});
+				// Use textContent to preserve line breaks
+				codeEl.textContent = content;
+			}
+			
+			// Mark as pinned when opened via click
+			isPopoverPinned = true;
+			
+			// Close popover when clicking outside
+			handleClickOutside = (event: MouseEvent): void => {
+				if (popover && isPopoverPinned && 
+					!popover.contains(event.target as Node) && 
+					!viewContentsButton.contains(event.target as Node)) {
+					popover.style.display = "none";
+					isPopoverPinned = false;
+					if (handleClickOutside) {
+						document.removeEventListener("click", handleClickOutside);
+					}
+					// Clear active popover reference
+					if (this.activePreviewPopover === popover) {
+						this.activePreviewPopover = null;
+						this.activePopoverClickOutsideHandler = null;
+					}
+				}
+			};
+			
+			// Hide popover when mouse leaves (only if not pinned by click)
+			const hidePopover = (): void => {
+				// Don't hide if popover is pinned by click
+				if (isPopoverPinned) {
+					return;
+				}
+				if (popoverTimeout) {
+					clearTimeout(popoverTimeout);
+				}
+				popoverTimeout = setTimeout(() => {
+					if (popover && !isPopoverPinned) {
+						popover.style.display = "none";
+					}
+				}, 200); // Small delay to allow moving to popover
+			};
+			
+			// Show popover when mouse enters (only if not pinned)
+			const showPopoverOnHover = (): void => {
+				if (popoverTimeout) {
+					clearTimeout(popoverTimeout);
+					popoverTimeout = null;
+				}
+				if (popover && !isPopoverPinned) {
+					popover.style.display = "block";
+				}
+			};
+			
+			// Only add hover listeners if not pinned (for hover behavior)
+			// But we'll add click outside listener for pinned popovers
+			viewContentsButton.addEventListener("mouseenter", showPopoverOnHover);
+			viewContentsButton.addEventListener("mouseleave", hidePopover);
+			popover.addEventListener("mouseenter", showPopoverOnHover);
+			popover.addEventListener("mouseleave", hidePopover);
+			
+			// Set as active popover and add click outside listener when popover is pinned
+			this.activePreviewPopover = popover;
+			this.activePopoverClickOutsideHandler = handleClickOutside;
+			if (handleClickOutside) {
+				setTimeout(() => {
+					document.addEventListener("click", handleClickOutside!);
+				}, 0);
+			}
+		};
+		
+		viewContentsButton.addEventListener("click", (e) => showPopover(e));
 
 		const removeButton = itemContainer.createEl("button", "item-button-qg");
 		setIconAndTooltip(removeButton, "x", "Remove");
 		removeButton.addEventListener("click", async (): Promise<void> => {
-			this.noteTokenElements.delete(item.path);
-			await this.removeNoteOrFolder(item, itemContainer);
+			// Clean up popover when item is removed
+			if (popover) {
+				// Clear active popover reference if this was the active one
+				const wasActive = this.activePreviewPopover === popover;
+				popover.remove();
+				popover = null;
+				isPopoverPinned = false;
+				if (wasActive) {
+					this.activePreviewPopover = null;
+					this.activePopoverClickOutsideHandler = null;
+				}
+			}
+			if (popoverTimeout) {
+				clearTimeout(popoverTimeout);
+				popoverTimeout = null;
+			}
+			if (handleClickOutside) {
+				document.removeEventListener("click", handleClickOutside);
+			}
+		this.noteTokenElements.delete(item.path);
+		this.noteItemContainers.delete(item.path);
+		await this.removeNoteOrFolder(item, itemContainer);
 		});
 
 		return tokens;
@@ -889,6 +1264,69 @@ export default class SelectorModal extends Modal {
 		this.preparedContent.delete(item.path);
 		this.selectedFilesContainer!.removeChild(element);
 		item instanceof TFile ? this.notePaths.push(item.path) : this.folderPaths.push(item.path);
+		
+		// Update action link visibility
+		this.updateActionLink();
+		
+		// If auto-select is off, check if the removed item should be added back to search results
+		if (!this.autoSelectMatching && item instanceof TFile) {
+			// Check if the file matches current search criteria
+			const query = this.searchQuery.toLowerCase();
+			const matchesQuery = !this.searchQuery.trim() || 
+				item.basename.toLowerCase().includes(query) ||
+				item.path.toLowerCase().includes(query);
+			
+			if (matchesQuery) {
+				// Check tag filter
+				let matchesTag = true;
+				if (this.filterTag) {
+					const cache = this.app.metadataCache.getFileCache(item);
+					if (cache) {
+						const searchTags = this.filterTag
+							.split(',')
+							.map(tag => tag.trim())
+							.filter(tag => tag.length > 0)
+							.map(tag => tag.startsWith("#") ? tag : `#${tag}`);
+						
+						const fileTags = this.getAllTagsFromCache(cache);
+						matchesTag = searchTags.some(searchTag => 
+							fileTags.some(fileTag => fileTag.toLowerCase().includes(searchTag.toLowerCase()))
+						);
+					} else {
+						matchesTag = false;
+					}
+				}
+				
+				// Check folder filter
+				let matchesFolder = true;
+				if (this.filterFolder) {
+					matchesFolder = item.path.toLowerCase().includes(this.filterFolder.toLowerCase());
+				}
+				
+				// Check date filter
+				let matchesDate = true;
+				if (this.filterDate !== "any") {
+					if (this.filterDate === "last-quiz") {
+						const lastQuizDate = this.getLastQuizGenerationDate();
+						if (!lastQuizDate || new Date(item.stat.mtime) < lastQuizDate) {
+							matchesDate = false;
+						}
+					} else {
+						const days = parseFloat(this.filterDate);
+						const msAgo = days * 24 * 60 * 60 * 1000;
+						const daysAgo = new Date(Date.now() - msAgo);
+						if (new Date(item.stat.mtime) < daysAgo) {
+							matchesDate = false;
+						}
+					}
+				}
+				
+				// If file matches all criteria, refresh search results to include it
+				if (matchesTag && matchesFolder && matchesDate) {
+					await this.performSearch();
+				}
+			}
+		}
 		
 		// Recalculate tokens after removal
 		if (this.selectedNoteFiles.size === 0) {
@@ -908,6 +1346,21 @@ export default class SelectorModal extends Modal {
 
 	private toggleButtons(buttons: SelectorModalButton[], disabled: boolean): void {
 		buttons.forEach(button => this.buttonMap[button].disabled = disabled);
+	}
+
+	private updateItemStyling(itemPath: string, tokens: number): void {
+		const itemContainer = this.noteItemContainers.get(itemPath);
+		if (!itemContainer) return;
+		
+		if (tokens === 0) {
+			itemContainer.addClass("item-zero-tokens-qg");
+			// Use Obsidian's setTooltip for better integration and cursor styling
+			setTooltip(itemContainer, "This file has 0 tokens because your search conditions (content changes mode, date filter, etc.) filtered out all content from this document");
+		} else {
+			itemContainer.removeClass("item-zero-tokens-qg");
+			// Remove tooltip by setting it to empty string
+			setTooltip(itemContainer, "");
+		}
 	}
 
 	private updatePromptTokens(tokens: number): void {
@@ -984,6 +1437,30 @@ export default class SelectorModal extends Modal {
 				text: `Prompt tokens: ${this.promptTokens}`
 			});
 		}
+		
+		// Update generator button state based on token count
+		this.updateGeneratorButtonState();
+	}
+	
+	private updateGeneratorButtonState(): void {
+		const generateButton = this.buttonMap[SelectorModalButton.GENERATE];
+		const hasEnoughTokens = this.promptTokens >= this.MIN_TOKENS_FOR_QUIZ;
+		
+		// Don't override button state if calculations are in progress or if recalculation is needed
+		// (those states are managed elsewhere)
+		if (this.isCalculatingTokens || this.needsRecalculation) {
+			return;
+		}
+		
+		// Disable button if not enough tokens
+		generateButton.disabled = !hasEnoughTokens;
+		
+		// Update tooltip
+		if (hasEnoughTokens) {
+			setTooltip(generateButton, "Generate quiz from selected notes");
+		} else {
+			setTooltip(generateButton, `Not enough content. Minimum ${this.MIN_TOKENS_FOR_QUIZ} tokens required for a 3-5 question quiz. Current: ${this.promptTokens} tokens.`);
+		}
 	}
 	
 	private scrollToSelectedNotes(): void {
@@ -996,7 +1473,7 @@ export default class SelectorModal extends Modal {
 		return (this.settings.generateTrueFalse || this.settings.generateMultipleChoice ||
 			this.settings.generateSelectAllThatApply || this.settings.generateFillInTheBlank ||
 			this.settings.generateMatching || this.settings.generateShortAnswer || this.settings.generateLongAnswer) &&
-			this.promptTokens > 0 &&
+			this.promptTokens >= this.MIN_TOKENS_FOR_QUIZ &&
 			!this.isCalculatingTokens &&
 			!this.needsRecalculation;
 	}
@@ -1083,10 +1560,38 @@ export default class SelectorModal extends Modal {
 					console.log('[renderContentSelectionUI] Switching to changes mode, auto-calculating');
 					await this.calculateAllTokens();
 				} else {
-					// Switching away from changes mode - clear recalculation flag and recalculate with full content
+					// Switching to full page mode - immediately recalculate with full content
 					console.log('[renderContentSelectionUI] Switching to full page mode, recalculating');
 					this.needsRecalculation = false;
-					await this.calculateAllTokens();
+					this.isCalculatingTokens = false;
+					
+					// For full page mode, we can calculate synchronously without progress indicators
+					let totalTokens = 0;
+					const filesToProcess = Array.from(this.selectedNoteFiles.values()).flat();
+					
+					for (const file of filesToProcess) {
+						const noteContents = await this.app.vault.cachedRead(file);
+						const contentToStore = cleanUpNoteContents(noteContents, getFrontMatterInfo(noteContents).exists);
+						
+						this.selectedNotes.set(file.path, contentToStore);
+						this.preparedContent.set(file.path, contentToStore);
+						
+						// Update individual note token display
+						const tokens = countNoteTokens(contentToStore);
+						const tokenElement = this.noteTokenElements.get(file.path);
+						if (tokenElement) {
+							tokenElement.textContent = tokens + " tokens";
+							this.updateItemStyling(file.path, tokens);
+						}
+						
+						totalTokens += tokens;
+					}
+					
+					this.promptTokens = totalTokens;
+					this.updatePromptTokens(totalTokens);
+					
+					// Refresh search results to show/hide items based on new token counts
+					await this.performSearch();
 				}
 			}
 		});
@@ -1388,6 +1893,10 @@ export default class SelectorModal extends Modal {
 			// Store placeholder for now
 			this.selectedNotes.set(file.path, "");
 			this.renderNote(file);
+			
+			// Update action link visibility
+			this.updateActionLink();
+			
 			if (!skipCalculation) {
 				this.needsRecalculation = true;
 			}
@@ -1398,6 +1907,9 @@ export default class SelectorModal extends Modal {
 			this.selectedNotes.set(file.path, contentToStore);
 			this.preparedContent.set(file.path, contentToStore);
 			this.renderNote(file);
+			
+			// Update action link visibility
+			this.updateActionLink();
 		}
 	}
 	
@@ -1442,6 +1954,8 @@ export default class SelectorModal extends Modal {
 			if (tokenElement) {
 				const tokens = countNoteTokens(contentToStore);
 				tokenElement.textContent = tokens + " tokens";
+				// Update styling based on new token count
+				this.updateItemStyling(file.path, tokens);
 			}
 			
 			// Update progress
@@ -1465,6 +1979,9 @@ export default class SelectorModal extends Modal {
 			this.needsRecalculation = false;
 			console.log(`[calculateAllTokens] Completed: ${this.promptTokens} tokens`);
 			this.updatePromptTokens(this.promptTokens);
+			
+			// Refresh search results to show/hide items based on new token counts
+			await this.performSearch();
 		}
 	}
 	

@@ -1,4 +1,4 @@
-import { App, Notice, setIcon, setTooltip } from "obsidian";
+import { App, Notice, setIcon, setTooltip, TFile, getFrontMatterInfo } from "obsidian";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { QuizSettings } from "../../settings/config";
 import { Question, QuizResult } from "../../utils/types";
@@ -27,6 +27,7 @@ import SoundManager from "../../services/soundManager";
 import ConfettiEffect from "../components/ConfettiEffect";
 import ElevenLabsCreditCheckModal from "./ElevenLabsCreditCheckModal";
 import type QuizGenerator from "../../main";
+import SelectorModal from "../selector/selectorModal";
 
 interface QuizModalProps {
 	app: App;
@@ -40,9 +41,11 @@ interface QuizModalProps {
 	plugin?: QuizGenerator;
 	handleClose: () => void;
 	onQuizComplete?: (results: QuizResult[], questionHashes: string[], timestamp: string) => void;
+	existingQuizFile?: TFile;
+	contentSelectionMode?: string;
 }
 
-const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, hasBeenTaken, previousAttempts, questionWrongCounts, plugin, handleClose, onQuizComplete }: QuizModalProps) => {
+const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, hasBeenTaken, previousAttempts, questionWrongCounts, plugin, handleClose, onQuizComplete, existingQuizFile, contentSelectionMode }: QuizModalProps) => {
 	const [skipCorrect, setSkipCorrect] = useState<boolean>(false);
 	const [questionIndex, setQuestionIndex] = useState<number>(0);
 	const [quiz, setQuiz] = useState<Question[]>(initialQuiz);
@@ -203,6 +206,16 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 			setIcon(keyboardIconButtonRef.current, "keyboard");
 			setTooltip(keyboardIconButtonRef.current, "Show keyboard shortcuts");
 			keyboardIconButtonRef.current.setAttribute("data-tooltip-position", "bottom");
+		}
+	}, []);
+
+	// Set icon for re-generate button
+	const regenerateButtonRef = useRef<HTMLButtonElement>(null);
+	useEffect(() => {
+		if (regenerateButtonRef.current) {
+			setIcon(regenerateButtonRef.current, "refresh-cw");
+			setTooltip(regenerateButtonRef.current, "Re-generate quiz from same sources");
+			regenerateButtonRef.current.setAttribute("data-tooltip-position", "bottom");
 		}
 	}, []);
 
@@ -1107,6 +1120,109 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 			setIcon(voiceMuteButtonRef.current, newValue ? "user-x" : "user");
 		}
 	};
+
+	const handleRegenerateQuiz = async () => {
+		if (!plugin || !existingQuizFile) {
+			new Notice("Cannot regenerate: Quiz file not found");
+			return;
+		}
+
+		try {
+			// Read the quiz file to extract metadata
+			const content = await app.vault.read(existingQuizFile);
+			const frontmatterInfo = getFrontMatterInfo(content);
+			
+			if (!frontmatterInfo.exists) {
+				new Notice("Cannot regenerate: No metadata found in quiz file");
+				return;
+			}
+
+			// Parse frontmatter to extract sources and content selection mode
+			const fmLines = frontmatterInfo.frontmatter.split('\n');
+			let sources: TFile[] = [];
+			let savedContentMode: string | undefined = contentSelectionMode;
+
+			// Extract sources from quizMaterialProperty
+			// First, check if quizMaterialProperty is configured
+			if (settings.quizMaterialProperty) {
+				const materialPropertyLine = fmLines.find(line => 
+					line.trim().startsWith(`${settings.quizMaterialProperty}:`)
+				);
+				
+				// If quizMaterialProperty is configured but not found in frontmatter, prevent regeneration
+				if (!materialPropertyLine) {
+					new Notice(`Cannot regenerate: Quiz material property "${settings.quizMaterialProperty}" not found in quiz file frontmatter. Please ensure the quiz file contains this property.`);
+					return;
+				}
+				
+				// Extract sources from the property
+				// Find all lines that are part of the list (indented with -)
+				const materialIndex = fmLines.indexOf(materialPropertyLine);
+				for (let i = materialIndex + 1; i < fmLines.length; i++) {
+					const line = fmLines[i].trim();
+					if (line.startsWith('-')) {
+						// Extract link from line - could be:
+						// - "[[file path]]" (markdown link)
+						// - [[file path]] (markdown link without quotes)
+						// - "file path" (plain path in quotes)
+						let filePath: string | null = null;
+						
+						// Try markdown link first
+						const markdownLinkMatch = line.match(/\[\[([^\]]+)\]\]/);
+						if (markdownLinkMatch) {
+							filePath = markdownLinkMatch[1];
+						} else {
+							// Try quoted path
+							const quotedMatch = line.match(/-\s*"([^"]+)"/);
+							if (quotedMatch) {
+								filePath = quotedMatch[1];
+							} else {
+								// Try unquoted path after dash
+								const unquotedMatch = line.match(/-\s*(.+)/);
+								if (unquotedMatch) {
+									filePath = unquotedMatch[1].trim();
+								}
+							}
+						}
+						
+						if (filePath) {
+							const file = app.vault.getAbstractFileByPath(filePath);
+							if (file instanceof TFile) {
+								sources.push(file);
+							}
+						}
+					} else if (line && !line.startsWith('quiz_') && !line.startsWith('---')) {
+						// Stop if we hit a non-list, non-quiz property line (but allow --- for frontmatter boundary)
+						break;
+					}
+				}
+			}
+
+			// Extract content selection mode
+			const contentModeLine = fmLines.find(line => line.trim().startsWith('quiz_content_mode:'));
+			if (contentModeLine) {
+				const match = contentModeLine.match(/quiz_content_mode:\s*(.+)/);
+				if (match) {
+					savedContentMode = match[1].trim();
+				}
+			}
+
+			if (sources.length === 0) {
+				new Notice("Cannot regenerate: No source files found in quiz metadata");
+				return;
+			}
+
+			// Close current quiz
+			handleClose();
+
+			// Open SelectorModal with pre-populated sources and content selection mode
+			const selectorModal = new SelectorModal(app, plugin, sources, undefined, savedContentMode);
+			selectorModal.open();
+		} catch (error) {
+			new Notice(`Error regenerating quiz: ${error instanceof Error ? error.message : 'Unknown error'}`);
+			console.error('Error regenerating quiz:', error);
+		}
+	};
 	
 	const handleRepeatQuestion = () => {
 		if (gamification.elevenLabsEnabled && elevenLabsRef.current && !voiceMuted) {
@@ -1217,6 +1333,17 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 						})()}
 					</div>
 					<div className="quiz-controls-top-right-qg">
+						{existingQuizFile && plugin && (
+							<button
+								ref={regenerateButtonRef}
+								className="quiz-mute-btn-qg"
+								onClick={(e) => {
+									e.stopPropagation();
+									handleRegenerateQuiz();
+								}}
+								title="Re-generate quiz from same sources"
+							/>
+						)}
 						<button
 							ref={keyboardIconButtonRef}
 							className="quiz-mute-btn-qg keyboard-icon-btn-qg"

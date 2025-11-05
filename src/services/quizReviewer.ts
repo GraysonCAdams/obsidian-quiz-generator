@@ -21,6 +21,22 @@ export default class QuizReviewer {
 		this.settings = settings;
 	}
 
+	/**
+	 * Parses questions from file contents and returns them
+	 */
+	public parseQuestions(fileContents: string): Question[] {
+		this.quiz.length = 0; // Clear existing questions
+		this.calloutParser(fileContents);
+		return [...this.quiz]; // Return a copy
+	}
+
+	/**
+	 * Gets the parsed questions (for internal use)
+	 */
+	public getQuestions(): Question[] {
+		return [...this.quiz];
+	}
+
 	public async openQuiz(file: TFile | null): Promise<void> {
 		if (!(file instanceof TFile)) {
 			new Notice("No active file");

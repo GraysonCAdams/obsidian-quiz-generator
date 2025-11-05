@@ -3,7 +3,8 @@ import QuizGenerator from "../../main";
 import { FilterBookmark } from "../../filters/filterTypes";
 import SelectorModal from "../../ui/selector/selectorModal";
 
-export default function displayFilterSettings(containerEl: HTMLElement, plugin: QuizGenerator): void {
+export default function displayFilterSettings(containerEl: HTMLElement, plugin: QuizGenerator, showAdvanced?: boolean): void {
+	const advanced = showAdvanced ?? false;
 	new Setting(containerEl).setName("Filter Bookmarks").setHeading();
 	
 	new Setting(containerEl)

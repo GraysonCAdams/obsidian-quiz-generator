@@ -41,7 +41,10 @@ export default abstract class Generator {
 		return "You are an assistant specialized in generating exam-style questions and answers. Your response must only be a JSON object with the following property:\n" +
 			`"questions": An array of JSON objects, where each JSON object represents a question and answer pair. Each question type has a different JSON object format.\n\n` +
 			`${activeFormats}\nFor example, if I ask you to generate ${this.systemPromptQuestions()}, the structure of your response should look like this:\n` +
-			`${this.exampleResponse()}` + (this.settings.language !== "English" ? `\n\n${this.generationLanguage()}` : "");
+			`${this.exampleResponse()}` + (this.settings.language !== "English" ? `\n\n${this.generationLanguage()}` : "") +
+			`\n\nIMPORTANT: Focus your questions on the actual material content, concepts, facts, and ideas presented in the text. ` +
+			`DO NOT ask questions about document structure, formatting, markdown syntax, headings, lists, callouts, or other organizational elements. ` +
+			`Questions should test understanding of the substantive content, not the presentation or structure of the document.`;
 	}
 
 	protected userPrompt(contents: string[]): string {
@@ -61,7 +64,10 @@ export default abstract class Generator {
 		}
 		
 		prompt += "\n\nIf the above text contains LaTeX, you should use $...$ (inline math mode) for mathematical symbols. " +
-			"The overall focus should be on assessing understanding and critical thinking.";
+			"The overall focus should be on assessing understanding and critical thinking.\n\n" +
+			"CRITICAL: Generate questions that focus on the actual material content, concepts, facts, and ideas presented in the text. " +
+			"DO NOT ask questions about document structure (such as headings, lists, callouts, markdown formatting, or organizational elements). " +
+			"Focus on substantive content that tests knowledge and understanding of the subject matter, not the document's formatting or structure.";
 		
 		return prompt;
 	}

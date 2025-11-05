@@ -4,63 +4,56 @@ import { languages } from "./generalConfig";
 import ElevenLabsService, { ElevenLabsVoice } from "../../services/elevenLabsService";
 import SoundManager from "../../services/soundManager";
 import { ElevenLabsApiKeyInfoModal } from "./elevenLabsApiKeyInfoModal";
+import { Provider, providers } from "../../generators/providers";
+import displayOpenAISettings from "../model/openai/openAISettings";
+import displayGoogleSettings from "../model/google/googleSettings";
+import displayAnthropicSettings from "../model/anthropic/anthropicSettings";
+import displayPerplexitySettings from "../model/perplexity/perplexitySettings";
+import displayMistralSettings from "../model/mistral/mistralSettings";
+import displayCohereSettings from "../model/cohere/cohereSettings";
+import displayOllamaSettings from "../model/ollama/ollamaSettings";
+import displayGenerationSettings from "../generation/generationSettings";
 
-const displayGeneralSettings = (containerEl: HTMLElement, plugin: QuizGenerator, refreshSettings?: () => void): void => {
+export const displayGeneralSettings = (containerEl: HTMLElement, plugin: QuizGenerator, refreshSettings?: () => void, showAdvanced?: boolean): void => {
+	const advanced = showAdvanced ?? false;
 	const app = plugin.app;
 	
-	// Display Settings
-	new Setting(containerEl).setName("Display").setHeading();
-	
+	// ========== GENERAL TAB CONTENT ==========
+	// Model Settings (first item)
+	new Setting(containerEl).setName("Model").setHeading();
+
 	new Setting(containerEl)
-		.setName("Show note path")
-		.setDesc("Turn this off to only show the name of selected notes.")
-		.addToggle(toggle =>
-			toggle
-				.setValue(plugin.settings.showNotePath)
+		.setName("Provider")
+		.setDesc("Model provider to use.")
+		.addDropdown(dropdown =>
+			dropdown
+				.addOptions(providers)
+				.setValue(plugin.settings.provider)
 				.onChange(async (value) => {
-					plugin.settings.showNotePath = value;
+					plugin.settings.provider = value;
 					await plugin.saveSettings();
+					if (refreshSettings) refreshSettings();
 				})
 		);
 
-	new Setting(containerEl)
-		.setName("Show folder path")
-		.setDesc("Turn this off to only show the name of selected folders.")
-		.addToggle(toggle =>
-			toggle
-				.setValue(plugin.settings.showFolderPath)
-				.onChange(async (value) => {
-					plugin.settings.showFolderPath = value;
-					await plugin.saveSettings();
-				})
-		);
-
-	new Setting(containerEl)
-		.setName("Include notes in subfolders")
-		.setDesc("Turn this off to only include notes in the selected folders.")
-		.addToggle(toggle =>
-			toggle
-				.setValue(plugin.settings.includeSubfolderNotes)
-				.onChange(async (value) => {
-					plugin.settings.includeSubfolderNotes = value;
-					await plugin.saveSettings();
-				})
-		);
+	if (plugin.settings.provider === Provider.OPENAI) {
+		displayOpenAISettings(containerEl, plugin, refreshSettings || (() => {}), advanced);
+	} else if (plugin.settings.provider === Provider.GOOGLE) {
+		displayGoogleSettings(containerEl, plugin, refreshSettings || (() => {}), advanced);
+	} else if (plugin.settings.provider === Provider.ANTHROPIC) {
+		displayAnthropicSettings(containerEl, plugin, refreshSettings || (() => {}), advanced);
+	} else if (plugin.settings.provider === Provider.PERPLEXITY) {
+		displayPerplexitySettings(containerEl, plugin, refreshSettings || (() => {}), advanced);
+	} else if (plugin.settings.provider === Provider.MISTRAL) {
+		displayMistralSettings(containerEl, plugin, refreshSettings || (() => {}), advanced);
+	} else if (plugin.settings.provider === Provider.COHERE) {
+		displayCohereSettings(containerEl, plugin, refreshSettings || (() => {}), advanced);
+	} else if (plugin.settings.provider === Provider.OLLAMA) {
+		displayOllamaSettings(containerEl, plugin, refreshSettings || (() => {}), advanced);
+	}
 
 	// Quiz Behavior
 	new Setting(containerEl).setName("Quiz Behavior").setHeading();
-	
-	new Setting(containerEl)
-		.setName("Randomize question order")
-		.setDesc("Turn this off to answer questions in their generated/saved order.")
-		.addToggle(toggle =>
-			toggle
-				.setValue(plugin.settings.randomizeQuestions)
-				.onChange(async (value) => {
-					plugin.settings.randomizeQuestions = value;
-					await plugin.saveSettings();
-				})
-		);
 
 	new Setting(containerEl)
 		.setName("Language")
@@ -87,9 +80,55 @@ const displayGeneralSettings = (containerEl: HTMLElement, plugin: QuizGenerator,
 				})
 		);
 
+	// Custom Conversation Styles section (advanced only)
+	if (advanced) {
+		new Setting(containerEl).setName("Conversation Mode Styles").setHeading();
+
+		const customStylesContainer = containerEl.createDiv("custom-styles-settings-qg");
+		
+		const refreshCustomStyles = () => {
+			customStylesContainer.empty();
+			
+			if (plugin.settings.customConversationStyles.length === 0) {
+				const emptyMsg = customStylesContainer.createDiv("empty-styles-message-qg");
+				emptyMsg.setText("No custom styles saved. Create one in Conversation Mode!");
+				emptyMsg.style.color = "var(--text-muted)";
+				emptyMsg.style.fontStyle = "italic";
+				emptyMsg.style.marginTop = "0.5em";
+			} else {
+				plugin.settings.customConversationStyles.forEach((style, index) => {
+					const styleSetting = new Setting(customStylesContainer)
+						.setName(style.name)
+						.setDesc(`Custom conversation style`);
+						
+					styleSetting.addButton(button => {
+						button
+							.setButtonText("Delete")
+							.setWarning()
+							.onClick(async () => {
+								plugin.settings.customConversationStyles.splice(index, 1);
+								await plugin.saveSettings();
+								refreshCustomStyles();
+							});
+					});
+				});
+			}
+		};
+		
+		refreshCustomStyles();
+	}
+	
+	// Add Generation settings to General tab
+	displayGenerationSettings(containerEl, plugin, refreshSettings);
+};
+
+export const displayGamificationSettings = (containerEl: HTMLElement, plugin: QuizGenerator, refreshSettings?: () => void, showAdvanced?: boolean): void => {
+	const advanced = showAdvanced ?? false;
+	
 	// Gamification section
 	new Setting(containerEl).setName("Gamification").setHeading();
 	
+	// Always visible: Core gamification settings (at least 1/3)
 	new Setting(containerEl)
 		.setName("Enable gamification")
 		.setDesc("Enable all gamification features including streaks, timers, and ratings.")
@@ -102,9 +141,6 @@ const displayGeneralSettings = (containerEl: HTMLElement, plugin: QuizGenerator,
 				})
 		);
 	
-	// Gamification Core Features
-	new Setting(containerEl).setName("Core Features").setHeading();
-	
 	new Setting(containerEl)
 		.setName("Show streak counter")
 		.setDesc("Display a counter showing consecutive correct answers during quiz.")
@@ -113,18 +149,6 @@ const displayGeneralSettings = (containerEl: HTMLElement, plugin: QuizGenerator,
 				.setValue(plugin.settings.gamification.showStreakCounter)
 				.onChange(async (value) => {
 					plugin.settings.gamification.showStreakCounter = value;
-					await plugin.saveSettings();
-				})
-		);
-	
-	new Setting(containerEl)
-		.setName("Show daily streak")
-		.setDesc("Track and display consecutive days with quiz activity.")
-		.addToggle(toggle =>
-			toggle
-				.setValue(plugin.settings.gamification.showDailyStreak)
-				.onChange(async (value) => {
-					plugin.settings.gamification.showDailyStreak = value;
 					await plugin.saveSettings();
 				})
 		);
@@ -141,69 +165,92 @@ const displayGeneralSettings = (containerEl: HTMLElement, plugin: QuizGenerator,
 				})
 		);
 	
-	new Setting(containerEl)
-		.setName("Show timer during quiz")
-		.setDesc("Display the timer while taking the quiz (in addition to at the end).")
-		.addToggle(toggle =>
-			toggle
-				.setValue(plugin.settings.gamification.showTimerDuringQuiz)
-				.onChange(async (value) => {
-					plugin.settings.gamification.showTimerDuringQuiz = value;
-					await plugin.saveSettings();
-				})
-		);
-	
-	new Setting(containerEl)
-		.setName("Show accuracy")
-		.setDesc("Display accuracy percentage in quiz summary.")
-		.addToggle(toggle =>
-			toggle
-				.setValue(plugin.settings.gamification.showAccuracy)
-				.onChange(async (value) => {
-					plugin.settings.gamification.showAccuracy = value;
-					await plugin.saveSettings();
-				})
-		);
-	
-	new Setting(containerEl)
-		.setName("Show reflection prompt")
-		.setDesc("Ask for reflection on wrong answers at the end of quiz.")
-		.addToggle(toggle =>
-			toggle
-				.setValue(plugin.settings.gamification.showReflection)
-				.onChange(async (value) => {
-					plugin.settings.gamification.showReflection = value;
-					await plugin.saveSettings();
-				})
-		);
-	
-	new Setting(containerEl)
-		.setName("Show star rating")
-		.setDesc("Display interactive star rating (0-5 with half stars) in quiz summary.")
-		.addToggle(toggle =>
-			toggle
-				.setValue(plugin.settings.gamification.showStarRating)
-				.onChange(async (value) => {
-					plugin.settings.gamification.showStarRating = value;
-					await plugin.saveSettings();
-				})
-		);
-	
-	new Setting(containerEl)
-		.setName("Enable flame effect")
-		.setDesc("Show animated flame effect around quiz card when reaching 5+ correct answers in a row.")
-		.addToggle(toggle =>
-			toggle
-				.setValue(plugin.settings.gamification.enableFlameEffect)
-				.onChange(async (value) => {
-					plugin.settings.gamification.enableFlameEffect = value;
-					await plugin.saveSettings();
-				})
-		);
+	// Advanced settings (hidden when advanced is off)
+	if (advanced) {
+		new Setting(containerEl)
+			.setName("Show daily streak")
+			.setDesc("Track and display consecutive days with quiz activity.")
+			.addToggle(toggle =>
+				toggle
+					.setValue(plugin.settings.gamification.showDailyStreak)
+					.onChange(async (value) => {
+						plugin.settings.gamification.showDailyStreak = value;
+						await plugin.saveSettings();
+					})
+			);
+		
+		new Setting(containerEl)
+			.setName("Show star rating")
+			.setDesc("Display interactive star rating (0-5 with half stars) in quiz summary.")
+			.addToggle(toggle =>
+				toggle
+					.setValue(plugin.settings.gamification.showStarRating)
+					.onChange(async (value) => {
+						plugin.settings.gamification.showStarRating = value;
+						await plugin.saveSettings();
+					})
+			);
+		
+		new Setting(containerEl)
+			.setName("Enable flame effect")
+			.setDesc("Show animated flame effect around quiz card when reaching 5+ correct answers in a row.")
+			.addToggle(toggle =>
+				toggle
+					.setValue(plugin.settings.gamification.enableFlameEffect)
+					.onChange(async (value) => {
+						plugin.settings.gamification.enableFlameEffect = value;
+						await plugin.saveSettings();
+					})
+			);
+		
+		// Other Quiz Features
+		new Setting(containerEl).setName("Other Quiz Features").setHeading();
+		
+		new Setting(containerEl)
+			.setName("Show timer during quiz")
+			.setDesc("Display the timer while taking the quiz (in addition to at the end).")
+			.addToggle(toggle =>
+				toggle
+					.setValue(plugin.settings.gamification.showTimerDuringQuiz)
+					.onChange(async (value) => {
+						plugin.settings.gamification.showTimerDuringQuiz = value;
+						await plugin.saveSettings();
+					})
+			);
+		
+		new Setting(containerEl)
+			.setName("Show accuracy")
+			.setDesc("Display accuracy percentage in quiz summary.")
+			.addToggle(toggle =>
+				toggle
+					.setValue(plugin.settings.gamification.showAccuracy)
+					.onChange(async (value) => {
+						plugin.settings.gamification.showAccuracy = value;
+						await plugin.saveSettings();
+					})
+			);
+		
+		new Setting(containerEl)
+			.setName("Show reflection prompt")
+			.setDesc("Ask for reflection on wrong answers at the end of quiz.")
+			.addToggle(toggle =>
+				toggle
+					.setValue(plugin.settings.gamification.showReflection)
+					.onChange(async (value) => {
+						plugin.settings.gamification.showReflection = value;
+						await plugin.saveSettings();
+					})
+			);
+	}
+};
 
+export const displayTimersSettings = (containerEl: HTMLElement, plugin: QuizGenerator, refreshSettings?: () => void, showAdvanced?: boolean): void => {
+	const advanced = showAdvanced ?? false;
+	
 	// Question Timer
 	new Setting(containerEl).setName("Question Timer").setHeading();
 	
+	// Always visible: Core timer setting
 	new Setting(containerEl)
 		.setName("Enable question timer")
 		.setDesc("Set a maximum time limit per question. Questions will auto-advance as incorrect when time expires.")
@@ -213,10 +260,15 @@ const displayGeneralSettings = (containerEl: HTMLElement, plugin: QuizGenerator,
 				.onChange(async (value) => {
 					plugin.settings.gamification.questionTimerEnabled = value;
 					await plugin.saveSettings();
+					// Refresh to show/hide nested settings and ticking sound
+					if (refreshSettings) {
+						refreshSettings();
+					}
 				})
 		);
 	
-	new Setting(containerEl)
+	// Always visible: Timer duration
+	const timerDurationSetting = new Setting(containerEl)
 		.setName("Timer duration (seconds)")
 		.setDesc("Maximum time allowed per question.")
 		.addText(text =>
@@ -231,46 +283,80 @@ const displayGeneralSettings = (containerEl: HTMLElement, plugin: QuizGenerator,
 					}
 				})
 		);
-
-	// Short Answer Timer Duration
-	new Setting(containerEl).setName("Short Answer Timer").setHeading();
+	timerDurationSetting.settingEl.style.paddingLeft = "2em";
 	
-	new Setting(containerEl)
-		.setName("Short answer timer duration (seconds)")
-		.setDesc("Time limit for short answer questions when question timer is enabled.")
-		.addText(text =>
-			text
-				.setPlaceholder("120")
-				.setValue((plugin.settings.gamification.shortAnswerTimerSeconds ?? 120).toString())
-				.onChange(async (value) => {
-					const num = parseInt(value);
-					if (!isNaN(num) && num > 0) {
-						plugin.settings.gamification.shortAnswerTimerSeconds = num;
-						await plugin.saveSettings();
-					}
-				})
-		);
+	// Advanced settings (hidden when advanced is off)
+	if (advanced) {
+		// Store references to nested settings for conditional visibility
+		let shortAnswerTimerSetting: Setting | null = null;
+		let longAnswerTimerSetting: Setting | null = null;
+		
+		// Function to update visibility of nested settings
+		const updateTimerSettingsVisibility = (): void => {
+			const isEnabled = plugin.settings.gamification.questionTimerEnabled;
+			
+			if (isEnabled) {
+				// Create nested settings if they don't exist
+				if (!shortAnswerTimerSetting) {
+					shortAnswerTimerSetting = new Setting(containerEl)
+						.setName("Short answer timer duration (seconds)")
+						.setDesc("Time limit for short answer questions when question timer is enabled.")
+						.addText(text =>
+							text
+								.setPlaceholder("120")
+								.setValue((plugin.settings.gamification.shortAnswerTimerSeconds ?? 120).toString())
+								.onChange(async (value) => {
+									const num = parseInt(value);
+									if (!isNaN(num) && num > 0) {
+										plugin.settings.gamification.shortAnswerTimerSeconds = num;
+										await plugin.saveSettings();
+									}
+								})
+						);
+					shortAnswerTimerSetting.settingEl.style.paddingLeft = "2em";
+				}
+				
+				if (!longAnswerTimerSetting) {
+					longAnswerTimerSetting = new Setting(containerEl)
+						.setName("Long answer timer duration (seconds)")
+						.setDesc("Time limit for long answer questions when question timer is enabled.")
+						.addText(text =>
+							text
+								.setPlaceholder("300")
+								.setValue((plugin.settings.gamification.longAnswerTimerSeconds ?? 300).toString())
+								.onChange(async (value) => {
+									const num = parseInt(value);
+									if (!isNaN(num) && num > 0) {
+										plugin.settings.gamification.longAnswerTimerSeconds = num;
+										await plugin.saveSettings();
+									}
+								})
+						);
+					longAnswerTimerSetting.settingEl.style.paddingLeft = "2em";
+				}
+				
+				shortAnswerTimerSetting.settingEl.style.display = "";
+				longAnswerTimerSetting.settingEl.style.display = "";
+			} else {
+				// Hide nested settings
+				if (shortAnswerTimerSetting) {
+					shortAnswerTimerSetting.settingEl.style.display = "none";
+				}
+				if (longAnswerTimerSetting) {
+					longAnswerTimerSetting.settingEl.style.display = "none";
+				}
+			}
+		};
+		
+		// Initial visibility setup
+		updateTimerSettingsVisibility();
+	}
+};
 
-	// Long Answer Timer Duration
-	new Setting(containerEl).setName("Long Answer Timer").setHeading();
+export const displayTextToSpeechSettings = (containerEl: HTMLElement, plugin: QuizGenerator, refreshSettings?: () => void, showAdvanced?: boolean): void => {
+	const advanced = showAdvanced ?? false;
+	const app = plugin.app;
 	
-	new Setting(containerEl)
-		.setName("Long answer timer duration (seconds)")
-		.setDesc("Time limit for long answer questions when question timer is enabled.")
-		.addText(text =>
-			text
-				.setPlaceholder("300")
-				.setValue((plugin.settings.gamification.longAnswerTimerSeconds ?? 300).toString())
-				.onChange(async (value) => {
-					const num = parseInt(value);
-					if (!isNaN(num) && num > 0) {
-						plugin.settings.gamification.longAnswerTimerSeconds = num;
-						await plugin.saveSettings();
-					}
-				})
-		);
-
-	// Text-to-Speech
 	new Setting(containerEl).setName("Text-to-Speech").setHeading();
 	
 	const fetchElevenLabsVoices = async (apiKey: string): Promise<ElevenLabsVoice[]> => {
@@ -293,6 +379,7 @@ const displayGeneralSettings = (containerEl: HTMLElement, plugin: QuizGenerator,
 	enableLink.setAttribute("rel", "noopener noreferrer");
 	enableDesc.appendChild(enableLink);
 	
+	// Always visible: Core TTS toggle
 	new Setting(containerEl)
 		.setName("Enable ElevenLabs text-to-speech")
 		.setDesc(enableDesc)
@@ -305,6 +392,7 @@ const displayGeneralSettings = (containerEl: HTMLElement, plugin: QuizGenerator,
 				})
 		);
 	
+	// Always visible: ElevenLabs API key and voice
 	const apiKeyDesc = document.createDocumentFragment();
 	apiKeyDesc.append("Your ElevenLabs API key for text-to-speech. The API key must have 'Text to Speech: Access', 'Voices: Read', and 'User: Read' permissions enabled. Get your API key from ");
 	const apiKeyLink = document.createElement("a");
@@ -449,10 +537,16 @@ const displayGeneralSettings = (containerEl: HTMLElement, plugin: QuizGenerator,
 					await plugin.saveSettings();
 				});
 		});
+};
+
+export const displaySoundNavigationSettings = (containerEl: HTMLElement, plugin: QuizGenerator, refreshSettings?: () => void, showAdvanced?: boolean): void => {
+	const advanced = showAdvanced ?? false;
+	const app = plugin.app;
 	
 	// Sound Effects
 	new Setting(containerEl).setName("Sound Effects").setHeading();
 	
+	// Always visible: Core sound toggle
 	new Setting(containerEl)
 		.setName("Enable sound effects")
 		.setDesc("Enable sound effects for correct/wrong answers and choosing options.")
@@ -469,15 +563,17 @@ const displayGeneralSettings = (containerEl: HTMLElement, plugin: QuizGenerator,
 				})
 		);
 	
+	// Always visible: Volume and ticking clock sound
 	// Only show volume slider when sound effects are enabled
+	let volumeSetting: Setting | null = null;
 	if (plugin.settings.gamification.soundEffectsEnabled) {
-		new Setting(containerEl)
+		const currentVolume = plugin.settings.gamification.soundVolume ?? 50;
+		const tempSoundManager = new SoundManager(true, currentVolume / 100);
+		
+		volumeSetting = new Setting(containerEl)
 			.setName("Volume")
 			.setDesc("Adjust the volume of sound effects (0-100%).")
 			.addSlider(slider => {
-				const currentVolume = plugin.settings.gamification.soundVolume ?? 50;
-				const tempSoundManager = new SoundManager(true, currentVolume / 100);
-				
 				slider
 					.setValue(currentVolume)
 					.setLimits(0, 100, 1)
@@ -495,108 +591,92 @@ const displayGeneralSettings = (containerEl: HTMLElement, plugin: QuizGenerator,
 			});
 	}
 	
-	new Setting(containerEl)
-		.setName("Ticking clock sound")
-		.setDesc("Play ticking sound when 1/3 of question timer remains (only if question timer is enabled).")
-		.addToggle(toggle =>
-			toggle
-				.setValue(plugin.settings.gamification.tickingSoundEnabled ?? false)
-				.onChange(async (value) => {
-					plugin.settings.gamification.tickingSoundEnabled = value;
-					await plugin.saveSettings();
-				})
-		);
-
-	// Pagination
-	new Setting(containerEl).setName("Navigation").setHeading();
-	
-	new Setting(containerEl)
-		.setName("Enable pagination")
-		.setDesc("Allow manual navigation between questions using arrow keys and navigation buttons. When disabled, auto-progress is forced on.")
-		.addToggle(toggle =>
-			toggle
-				.setValue(plugin.settings.gamification.paginationEnabled ?? false)
-				.onChange(async (value) => {
-					plugin.settings.gamification.paginationEnabled = value;
-					// Force auto-progress when pagination is disabled
-					if (!value) {
-						plugin.settings.gamification.autoProgressEnabled = true;
-					}
-					await plugin.saveSettings();
-					// Refresh settings to update auto-progress toggle state
-					if (refreshSettings) {
-						refreshSettings();
-					}
-				})
-		);
-
-	new Setting(containerEl)
-		.setName("Auto-progress after answer")
-		.setDesc(plugin.settings.gamification.paginationEnabled ?? false
-			? "Automatically advance to the next question after answering."
-			: "Automatically advance to the next question after answering. (Forced on when pagination is disabled)")
-		.addToggle(toggle => {
-			const isPaginationEnabled = plugin.settings.gamification.paginationEnabled ?? false;
-			toggle
-				.setValue(plugin.settings.gamification.autoProgressEnabled ?? true)
-				.setDisabled(!isPaginationEnabled)
-				.onChange(async (value) => {
-					plugin.settings.gamification.autoProgressEnabled = value;
-					await plugin.saveSettings();
-				});
-		});
-	
-	new Setting(containerEl)
-		.setName("Progress delay (seconds)")
-		.setDesc("Time to wait before automatically moving to the next question after answering.")
-		.addText(text =>
-			text
-				.setPlaceholder("3")
-				.setValue((plugin.settings.gamification.autoProgressSeconds ?? 3).toString())
-				.onChange(async (value) => {
-					const num = parseInt(value);
-					if (!isNaN(num) && num > 0) {
-						plugin.settings.gamification.autoProgressSeconds = num;
-						await plugin.saveSettings();
-					}
-				})
-		);
-
-	// Custom Conversation Styles section
-	new Setting(containerEl).setName("Conversation Mode Styles").setHeading();
-
-	const customStylesContainer = containerEl.createDiv("custom-styles-settings-qg");
-	
-	const refreshCustomStyles = () => {
-		customStylesContainer.empty();
+	// Ticking clock sound - only show when question timer is enabled
+	const updateTickingSoundVisibility = (): void => {
+		const isQuestionTimerEnabled = plugin.settings.gamification.questionTimerEnabled;
 		
-		if (plugin.settings.customConversationStyles.length === 0) {
-			const emptyMsg = customStylesContainer.createDiv("empty-styles-message-qg");
-			emptyMsg.setText("No custom styles saved. Create one in Conversation Mode!");
-			emptyMsg.style.color = "var(--text-muted)";
-			emptyMsg.style.fontStyle = "italic";
-			emptyMsg.style.marginTop = "0.5em";
-		} else {
-			plugin.settings.customConversationStyles.forEach((style, index) => {
-				const styleSetting = new Setting(customStylesContainer)
-					.setName(style.name)
-					.setDesc(`Custom conversation style`);
-					
-				styleSetting.addButton(button => {
-					button
-						.setButtonText("Delete")
-						.setWarning()
-						.onClick(async () => {
-							plugin.settings.customConversationStyles.splice(index, 1);
+		// Remove existing ticking sound setting if it exists
+		const existingTickingSound = containerEl.querySelector('.ticking-sound-setting-qg');
+		if (existingTickingSound) {
+			existingTickingSound.remove();
+		}
+		
+		// Only create if question timer is enabled
+		if (isQuestionTimerEnabled) {
+			const tickingSoundSetting = new Setting(containerEl)
+				.setName("Ticking clock sound")
+				.setDesc("Play ticking sound when 1/3 of question timer remains (only if question timer is enabled).");
+			tickingSoundSetting.settingEl.classList.add('ticking-sound-setting-qg');
+			tickingSoundSetting
+				.addToggle(toggle =>
+					toggle
+						.setValue(plugin.settings.gamification.tickingSoundEnabled ?? false)
+						.onChange(async (value) => {
+							plugin.settings.gamification.tickingSoundEnabled = value;
 							await plugin.saveSettings();
-							refreshCustomStyles();
-						});
-				});
-			});
+						})
+				);
 		}
 	};
 	
-	refreshCustomStyles();
-};
+	// Initial setup
+	updateTickingSoundVisibility();
 
-export default displayGeneralSettings;
+	// Advanced settings (hidden when advanced is off)
+	if (advanced) {
+		// Pagination
+		new Setting(containerEl).setName("Navigation").setHeading();
+		
+		new Setting(containerEl)
+			.setName("Enable pagination")
+			.setDesc("Allow manual navigation between questions using arrow keys and navigation buttons. When disabled, auto-progress is forced on.")
+			.addToggle(toggle =>
+				toggle
+					.setValue(plugin.settings.gamification.paginationEnabled ?? false)
+					.onChange(async (value) => {
+						plugin.settings.gamification.paginationEnabled = value;
+						// Force auto-progress when pagination is disabled
+						if (!value) {
+							plugin.settings.gamification.autoProgressEnabled = true;
+						}
+						await plugin.saveSettings();
+						// Refresh settings to update auto-progress toggle state
+						if (refreshSettings) {
+							refreshSettings();
+						}
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Auto-progress after answer")
+			.setDesc(plugin.settings.gamification.paginationEnabled ?? false
+				? "Automatically advance to the next question after answering."
+				: "Automatically advance to the next question after answering. (Forced on when pagination is disabled)")
+			.addToggle(toggle => {
+				const isPaginationEnabled = plugin.settings.gamification.paginationEnabled ?? false;
+				toggle
+					.setValue(plugin.settings.gamification.autoProgressEnabled ?? true)
+					.setDisabled(!isPaginationEnabled)
+					.onChange(async (value) => {
+						plugin.settings.gamification.autoProgressEnabled = value;
+						await plugin.saveSettings();
+					});
+			});
+		
+		new Setting(containerEl)
+			.setName("Progress delay (seconds)")
+			.setDesc("Time to wait before automatically moving to the next question after answering.")
+			.addText(text =>
+				text
+					.setPlaceholder("3")
+					.setValue((plugin.settings.gamification.autoProgressSeconds ?? 3).toString())
+					.onChange(async (value) => {
+						const num = parseInt(value);
+						if (!isNaN(num) && num > 0) {
+							plugin.settings.gamification.autoProgressSeconds = num;
+							await plugin.saveSettings();
+						}
+					})
+			);
+	}
+};

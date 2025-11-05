@@ -1,4 +1,4 @@
-import { App } from "obsidian";
+import { App, TFile } from "obsidian";
 import { QuizSettings } from "../../settings/config";
 import { Question, QuizResult } from "../../utils/types";
 import QuizModal from "./QuizModal";
@@ -17,9 +17,11 @@ interface QuizModalWrapperProps {
 	plugin?: QuizGenerator;
 	handleClose: () => void;
 	onQuizComplete?: (results: QuizResult[], questionHashes: string[], timestamp: string) => void;
+	existingQuizFile?: TFile;
+	contentSelectionMode?: string;
 }
 
-const QuizModalWrapper = ({ app, settings, quiz, quizSaver, reviewing, hasBeenTaken, previousAttempts, questionWrongCounts, plugin, handleClose, onQuizComplete }: QuizModalWrapperProps) => {
+const QuizModalWrapper = ({ app, settings, quiz, quizSaver, reviewing, hasBeenTaken, previousAttempts, questionWrongCounts, plugin, handleClose, onQuizComplete, existingQuizFile, contentSelectionMode }: QuizModalWrapperProps) => {
 	return <QuizModal
 		app={app}
 		settings={settings}
@@ -32,6 +34,8 @@ const QuizModalWrapper = ({ app, settings, quiz, quizSaver, reviewing, hasBeenTa
 		plugin={plugin}
 		handleClose={handleClose}
 		onQuizComplete={onQuizComplete}
+		existingQuizFile={existingQuizFile}
+		contentSelectionMode={contentSelectionMode}
 	/>;
 };
 

@@ -18,12 +18,14 @@ export default class QuizSaver {
 	private readonly saveFilePath: string;
 	private readonly validSavePath: boolean;
 	private readonly existingQuizFile?: TFile;
+	private readonly contentSelectionMode?: string; // "full" or "changes"
 
-	constructor(app: App, settings: QuizSettings, quizSources: TFile[], existingQuizFile?: TFile) {
+	constructor(app: App, settings: QuizSettings, quizSources: TFile[], existingQuizFile?: TFile, contentSelectionMode?: string) {
 		this.app = app;
 		this.settings = settings;
 		this.quizSources = quizSources;
 		this.existingQuizFile = existingQuizFile;
+		this.contentSelectionMode = contentSelectionMode;
 		this.saveFilePath = existingQuizFile?.path ?? this.getSaveFilePath();
 		this.validSavePath = this.app.vault.getAbstractFileByPath(this.settings.savePath) instanceof TFolder;
 	}
@@ -47,8 +49,20 @@ export default class QuizSaver {
 			quiz.push(this.createCalloutQuestion(question));
 		}
 
+		// Get save file (this will ensure contentSelectionMode is in frontmatter if provided)
 		const saveFile = await this.getSaveFile();
-		await this.app.vault.append(saveFile, quiz.join(""));
+		
+		// If file already exists and has content, we need to append, otherwise create with content
+		const existingContent = await this.app.vault.read(saveFile);
+		if (existingContent.trim().length === 0 || existingContent.trim() === "---\n---" || existingContent.trim().startsWith("---\n")) {
+			// File is empty or only has frontmatter, write the quiz content
+			const quizContent = quiz.join("");
+			await this.app.vault.modify(saveFile, existingContent + (existingContent.endsWith("\n") ? "" : "\n") + quizContent);
+		} else {
+			// File has content, append
+			await this.app.vault.append(saveFile, quiz.join(""));
+		}
+		
 		if (this.validSavePath) {
 			new Notice("All questions saved");
 		} else {
@@ -301,14 +315,59 @@ export default class QuizSaver {
 	}
 
 	private async getSaveFile(): Promise<TFile> {
+		const saveFile = this.app.vault.getAbstractFileByPath(this.saveFilePath);
+		
+		// If file exists, ensure frontmatter includes contentSelectionMode if provided
+		if (saveFile instanceof TFile) {
+			if (this.contentSelectionMode) {
+				const content = await this.app.vault.read(saveFile);
+				const frontmatterInfo = getFrontMatterInfo(content);
+				
+				// Check if contentSelectionMode is already in frontmatter
+				if (frontmatterInfo.exists) {
+					const fmLines = frontmatterInfo.frontmatter.split('\n');
+					const hasContentMode = fmLines.some(line => line.trim().startsWith('quiz_content_mode:'));
+					
+					if (!hasContentMode) {
+						// Add contentSelectionMode to existing frontmatter
+						const updatedFrontmatter = [
+							"---",
+							...fmLines.slice(1, -1), // All lines except --- boundaries
+							`quiz_content_mode: ${this.contentSelectionMode}`,
+							"---"
+						].join('\n');
+						
+						const newContent = updatedFrontmatter + '\n' + content.slice(frontmatterInfo.contentStart);
+						await this.app.vault.modify(saveFile, newContent);
+					}
+				} else {
+					// Add new frontmatter with contentSelectionMode
+					const sourcesProperty = this.settings.quizMaterialProperty
+						? `${this.settings.quizMaterialProperty}:\n${this.quizSources.map(source => `  - "${this.app.fileManager.generateMarkdownLink(source, this.saveFilePath)}"`).join("\n")}\n`
+						: "";
+					const newFrontmatter = [
+						"---",
+						sourcesProperty,
+						`quiz_content_mode: ${this.contentSelectionMode}`,
+						"---\n"
+					].join('\n');
+					await this.app.vault.modify(saveFile, newFrontmatter + content);
+				}
+			}
+			return saveFile;
+		}
+		
+		// Create new file with frontmatter
 		const sourcesProperty = this.settings.quizMaterialProperty
 			? `${this.settings.quizMaterialProperty}:\n${this.quizSources.map(source => `  - "${this.app.fileManager.generateMarkdownLink(source, this.saveFilePath)}"`).join("\n")}\n`
 			: "";
-		const initialContent = sourcesProperty
-			? `---\n${sourcesProperty}---\n`
+		const contentModeProperty = this.contentSelectionMode 
+			? `quiz_content_mode: ${this.contentSelectionMode}\n`
 			: "";
-		const saveFile = this.app.vault.getAbstractFileByPath(this.saveFilePath);
-		return saveFile instanceof TFile ? saveFile : await this.app.vault.create(this.saveFilePath, initialContent);
+		const initialContent = sourcesProperty || contentModeProperty
+			? `---\n${sourcesProperty}${contentModeProperty}---\n`
+			: "";
+		return await this.app.vault.create(this.saveFilePath, initialContent);
 	}
 
 	private createCalloutQuestion(question: Question): string {

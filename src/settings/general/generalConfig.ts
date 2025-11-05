@@ -60,16 +60,19 @@ export interface GamificationConfig {
 	voiceMuted: boolean; // Session-level mute for voice
 }
 
+export type QuestionRandomizationMode = "all" | "within-subjects";
+
 export interface GeneralConfig {
 	showNotePath: boolean;
 	showFolderPath: boolean;
 	includeSubfolderNotes: boolean;
-	randomizeQuestions: boolean;
+	randomizeQuestions: QuestionRandomizationMode;
 	language: string;
 	autoRenameQuizWithScore: boolean;
 	customConversationStyles: ConversationStyle[];
 	customConversationPromptDraft: string;
 	gamification: GamificationConfig;
+	showAdvancedSettings: boolean;
 }
 
 export const DEFAULT_GAMIFICATION_CONFIG: GamificationConfig = {
@@ -105,10 +108,11 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralConfig = {
 	showNotePath: false,
 	showFolderPath: false,
 	includeSubfolderNotes: true,
-	randomizeQuestions: false,
+	randomizeQuestions: "all", // Default to "Randomize all questions and subjects"
 	language: "English",
 	autoRenameQuizWithScore: false,
 	customConversationStyles: [],
 	customConversationPromptDraft: "",
 	gamification: DEFAULT_GAMIFICATION_CONFIG,
+	showAdvancedSettings: false,
 };

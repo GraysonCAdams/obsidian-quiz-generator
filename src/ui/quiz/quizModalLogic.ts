@@ -1,10 +1,19 @@
 import { App, Notice, TFile, TFolder, getFrontMatterInfo } from "obsidian";
 import { createRoot, Root } from "react-dom/client";
 import { QuizSettings } from "../../settings/config";
+import { QuestionType } from "../../settings/generation/generationConfig";
 import { Question, QuizResult, QuestionAttempt } from "../../utils/types";
 import QuizSaver from "../../services/quizSaver";
 import QuizModalWrapper from "./QuizModalWrapper";
 import { shuffleArray, hashString } from "../../utils/helpers";
+import {
+	isTrueFalse,
+	isMultipleChoice,
+	isSelectAllThatApply,
+	isFillInTheBlank,
+	isMatching,
+	isShortOrLongAnswer
+} from "../../utils/typeGuards";
 import type QuizGenerator from "../../main";
 import ElevenLabsService from "../../services/elevenLabsService";
 import AudioProgressModal from "../progress/audioProgressModal";
@@ -26,8 +35,9 @@ export default class QuizModalLogic {
 	private readonly questionWrongCounts?: Map<string, number>;
 	private readonly orderOverride?: OrderOption;
 	private readonly plugin?: QuizGenerator;
+	private readonly contentSelectionMode?: string; // "full" or "changes"
 
-	constructor(app: App, settings: QuizSettings, quiz: Question[], quizSources: TFile[], existingQuizFile?: TFile, questionWrongCounts?: Map<string, number>, orderOverride?: OrderOption, plugin?: QuizGenerator) {
+	constructor(app: App, settings: QuizSettings, quiz: Question[], quizSources: TFile[], existingQuizFile?: TFile, questionWrongCounts?: Map<string, number>, orderOverride?: OrderOption, plugin?: QuizGenerator, contentSelectionMode?: string) {
 		this.app = app;
 		this.settings = settings;
 		this.quiz = quiz;
@@ -36,7 +46,8 @@ export default class QuizModalLogic {
 		this.questionWrongCounts = questionWrongCounts;
 		this.orderOverride = orderOverride;
 		this.plugin = plugin;
-		this.quizSaver = new QuizSaver(this.app, this.settings, this.quizSources, this.existingQuizFile);
+		this.contentSelectionMode = contentSelectionMode;
+		this.quizSaver = new QuizSaver(this.app, this.settings, this.quizSources, this.existingQuizFile, this.contentSelectionMode);
 		this.handleEscapePressed = (event: KeyboardEvent): void => {
 			if (event.key === "Escape" && !(event.target instanceof HTMLInputElement)) {
 				this.removeQuiz();
@@ -60,8 +71,51 @@ export default class QuizModalLogic {
 		let quiz = [...this.quiz];
 		if (this.orderOverride) {
 			quiz = this.applyOrdering(quiz);
-		} else if (this.settings.randomizeQuestions) {
-			quiz = shuffleArray(quiz);
+		} else {
+			// Apply question type ordering first
+			quiz = this.applyQuestionTypeOrdering(quiz);
+			
+			// Then apply question randomization based on mode
+			if (this.settings.randomizeQuestions === "all") {
+				// Randomize all questions and subjects (shuffle everything)
+				quiz = shuffleArray(quiz);
+			} else if (this.settings.randomizeQuestions === "within-subjects") {
+				// Randomize questions within each subject (question type cluster)
+				// Group by type, shuffle within each group, then reconstruct
+				const getQuestionType = (q: Question): QuestionType => {
+					if (isTrueFalse(q)) return "trueFalse";
+					if (isMultipleChoice(q)) return "multipleChoice";
+					if (isSelectAllThatApply(q)) return "selectAllThatApply";
+					if (isFillInTheBlank(q)) return "fillInTheBlank";
+					if (isMatching(q)) return "matching";
+					if (isShortOrLongAnswer(q)) return "shortAnswer";
+					return "longAnswer";
+				};
+				
+				const questionsByType = new Map<QuestionType, Question[]>();
+				quiz.forEach(q => {
+					const type = getQuestionType(q);
+					if (!questionsByType.has(type)) {
+						questionsByType.set(type, []);
+					}
+					questionsByType.get(type)!.push(q);
+				});
+				
+				// Shuffle within each type group
+				const shuffledByType: Question[] = [];
+				questionsByType.forEach((questions) => {
+					shuffledByType.push(...shuffleArray(questions));
+				});
+				
+				// Reconstruct in the configured question type order
+				const orderedQuiz: Question[] = [];
+				this.settings.questionTypeOrder.forEach(type => {
+					const typeQuestions = shuffledByType.filter(q => getQuestionType(q) === type);
+					orderedQuiz.push(...typeQuestions);
+				});
+				
+				quiz = orderedQuiz;
+			}
 		}
 
 		if (this.settings.autoSave && this.quizSources.length > 0) {
@@ -98,6 +152,8 @@ export default class QuizModalLogic {
 				onQuizComplete: async (results: QuizResult[], questionHashes: string[], timestamp: string) => {
 					await this.quizSaver.saveQuizResults(results, questionHashes, timestamp);
 				},
+			existingQuizFile: this.existingQuizFile,
+			contentSelectionMode: this.contentSelectionMode,
 		}));
 		document.body.addEventListener("keydown", this.handleEscapePressed);
 		}
@@ -525,6 +581,90 @@ export default class QuizModalLogic {
 		}
 		
 		return ordered.map(item => item.question);
+	}
+
+	private applyQuestionTypeOrdering(questions: Question[]): Question[] {
+		// Get question type for a question
+		const getQuestionType = (q: Question): QuestionType => {
+			if (isTrueFalse(q)) return "trueFalse";
+			if (isMultipleChoice(q)) return "multipleChoice";
+			if (isSelectAllThatApply(q)) return "selectAllThatApply";
+			if (isFillInTheBlank(q)) return "fillInTheBlank";
+			if (isMatching(q)) return "matching";
+			if (isShortOrLongAnswer(q)) return "shortAnswer";
+			return "longAnswer";
+		};
+
+		// If question type order randomization is enabled, randomize types
+		if (this.settings.randomizeQuestionTypeOrder) {
+			// Group questions by type
+			const questionsByType = new Map<QuestionType, Question[]>();
+			questions.forEach(q => {
+				const type = getQuestionType(q);
+				if (!questionsByType.has(type)) {
+					questionsByType.set(type, []);
+				}
+				questionsByType.get(type)!.push(q);
+			});
+
+			// Get all types and randomize them
+			const types = Array.from(questionsByType.keys());
+			const shuffledTypes = shuffleArray(types);
+
+			// Reconstruct questions in randomized type order
+			const ordered: Question[] = [];
+			shuffledTypes.forEach(type => {
+				const typeQuestions = questionsByType.get(type) || [];
+				// Within each type, maintain original order (or shuffle if content is randomized)
+				ordered.push(...typeQuestions);
+			});
+
+			return ordered;
+		}
+
+		// Apply configured question type order
+		// Group questions by type
+		const questionsByType = new Map<QuestionType, Question[]>();
+		questions.forEach(q => {
+			const type = getQuestionType(q);
+			if (!questionsByType.has(type)) {
+				questionsByType.set(type, []);
+			}
+			questionsByType.get(type)!.push(q);
+		});
+
+		// Get enabled types in configured order
+		const enabledTypes = this.settings.questionTypeOrder.filter(type => {
+			switch (type) {
+				case "trueFalse": return this.settings.generateTrueFalse;
+				case "multipleChoice": return this.settings.generateMultipleChoice;
+				case "selectAllThatApply": return this.settings.generateSelectAllThatApply;
+				case "fillInTheBlank": return this.settings.generateFillInTheBlank;
+				case "matching": return this.settings.generateMatching;
+				case "shortAnswer": return this.settings.generateShortAnswer;
+				case "longAnswer": return this.settings.generateLongAnswer;
+				default: return false;
+			}
+		});
+
+		// Reconstruct questions in configured type order
+		const ordered: Question[] = [];
+		enabledTypes.forEach(type => {
+			const typeQuestions = questionsByType.get(type) || [];
+			// If content is not randomized, group all questions of the same type together
+			// This creates "clusters" of question types
+			ordered.push(...typeQuestions);
+		});
+
+		// Add any questions with unknown types at the end
+		questions.forEach(q => {
+			const type = getQuestionType(q);
+			if (!enabledTypes.includes(type)) {
+				ordered.push(q);
+			}
+		});
+
+		return ordered;
 	}
 
 	private removeQuiz(): void {

@@ -1,4 +1,4 @@
-import { App, Component, getFrontMatterInfo, MarkdownRenderer, Modal, Notice, Scope, setIcon, setTooltip, Setting, TAbstractFile, TFile, TFolder, Vault } from "obsidian";
+import { App, Component, getFrontMatterInfo, MarkdownRenderer, Modal, Notice, Scope, setIcon, setTooltip, Setting, TextComponent, TAbstractFile, TFile, TFolder, Vault } from "obsidian";
 import { QuizSettings } from "../../settings/config";
 import { Question, Quiz } from "../../utils/types";
 import {
@@ -16,7 +16,13 @@ import GeneratorFactory from "../../generators/generatorFactory";
 import QuizModalLogic from "../quiz/quizModalLogic";
 import { cleanUpNoteContents } from "../../utils/markdownCleaner";
 import { countNoteTokens, setIconAndTooltip } from "../../utils/helpers";
-import { Provider } from "../../generators/providers";
+import { Provider, providers } from "../../generators/providers";
+import { openAITextGenModels } from "../../generators/openai/openAIModels";
+import { googleTextGenModels } from "../../generators/google/googleModels";
+import { anthropicTextGenModels } from "../../generators/anthropic/anthropicModels";
+import { perplexityTextGenModels } from "../../generators/perplexity/perplexityModels";
+import { mistralTextGenModels } from "../../generators/mistral/mistralModels";
+import { cohereTextGenModels } from "../../generators/cohere/cohereModels";
 import FilterBuilderModal from "../filter/filterBuilderModal";
 import ProgressModal from "../progress/progressModal";
 import type QuizGenerator from "../../main";
@@ -48,6 +54,8 @@ export default class SelectorModal extends Modal {
 	private folderPaths: string[];
 	private readonly selectedNotes: Map<string, string> = new Map<string, string>();
 	private readonly selectedNoteFiles: Map<string, TFile[]> = new Map<string, TFile[]>();
+	private readonly backlinkMap: Map<string, TFile[]> = new Map<string, TFile[]>(); // Maps parent note path to its backlinks
+	private readonly backlinkContent: Map<string, string> = new Map<string, string>(); // Maps backlink file path to its prepared content
 	private readonly itemContainer: HTMLDivElement;
 	private readonly tokenContainer: HTMLSpanElement;
 	private promptTokens: number = 0;
@@ -77,9 +85,9 @@ export default class SelectorModal extends Modal {
 	private filterTag: string = "";
 	private filterFolder: string = "";
 	private filterDate: string = "any";
+	private customFilterDate: Date | null = null; // For "Since specified date..." option
 	private removeFilteredTags: boolean = false;
 	private filteredTagsToRemove: Set<string> = new Set();
-	private autoSelectMatching: boolean = false;
 	private currentLoadedBookmarkId: string | null = null;
 	private isCalculatingTokens: boolean = false;
 	private tokenCalculationProgress: number = 0;
@@ -88,8 +96,16 @@ export default class SelectorModal extends Modal {
 	private preparedContent: Map<string, string> = new Map(); // Cache prepared content
 	private noteTokenElements: Map<string, HTMLElement> = new Map(); // Store token display elements
 	private noteItemContainers: Map<string, HTMLElement> = new Map(); // Store item containers for styling updates
+	private saveSearchBtn: HTMLButtonElement | null = null; // Reference to save search button
+	private searchDebounceTimer: NodeJS.Timeout | null = null; // Debounce timer for search input
+	private searchLoadingOverlay: HTMLDivElement | null = null; // Loading overlay for search results
+	private isSearching: boolean = false; // Track if search is in progress
+	private loadingCursorCount: number = 0; // Track number of concurrent loading operations
+	private modelDisplayLink: HTMLAnchorElement | null = null; // Model display link beneath generate button
+	private focusUpdateHandler: (() => void) | null = null; // Handler for window focus events
+	private questionCountElement: HTMLElement | null = null; // Question count display element
 
-	constructor(app: App, plugin: QuizGenerator, initialFiles?: TFile[], bookmarkId?: string) {
+	constructor(app: App, plugin: QuizGenerator, initialFiles?: TFile[], bookmarkId?: string, initialContentMode?: string) {
 		super(app);
 		this.plugin = plugin;
 		this.settings = plugin.settings;
@@ -104,6 +120,11 @@ export default class SelectorModal extends Modal {
 		this.titleEl.addClass("modal-title-qg");
 		this.titleEl.setText("Select Notes for Quiz");
 
+		// Set initial content selection mode if provided
+		if (initialContentMode && (initialContentMode === "full" || initialContentMode === "changes")) {
+			this.contentSelectionMode = initialContentMode as ContentSelectionMode;
+		}
+
 		// Search bar
 		this.renderSearchBar();
 
@@ -114,6 +135,15 @@ export default class SelectorModal extends Modal {
 		const leftColumn = this.itemContainer.createDiv("column-left-qg");
 		this.searchResultsContainer = leftColumn.createDiv("search-results-section-qg");
 		this.searchResultsContainer.style.display = "none";
+		
+		// Create loading overlay for search results
+		this.searchLoadingOverlay = leftColumn.createDiv("search-loading-overlay-qg");
+		this.searchLoadingOverlay.style.display = "none";
+		const loadingContent = this.searchLoadingOverlay.createDiv("search-loading-content-qg");
+		const loadingSpinner = loadingContent.createDiv("search-loading-spinner-qg");
+		setIcon(loadingSpinner, "loader-2");
+		const loadingText = loadingContent.createDiv("search-loading-text-qg");
+		loadingText.textContent = "Searching...";
 		
 		// Right column: Selected files
 		const rightColumn = this.itemContainer.createDiv("column-right-qg");
@@ -126,8 +156,8 @@ export default class SelectorModal extends Modal {
 			cls: "selection-action-link-qg",
 			text: "Deselect all"
 		});
-		this.actionLink.addEventListener("click", () => {
-			this.handleActionLinkClick();
+		this.actionLink.addEventListener("click", async () => {
+			await this.handleActionLinkClick();
 		});
 		
 		// Selected files section
@@ -136,14 +166,11 @@ export default class SelectorModal extends Modal {
 		// Content selection UI
 		this.renderContentSelectionUI();
 		
-		// Backlinks UI
-		this.renderBacklinksUI();
-		
 		// Auto-tagging UI
 		this.renderAutoTagUI();
 
 		this.tokenContainer = this.contentEl.createSpan("prompt-tokens-qg");
-		this.tokenContainer.textContent = `0 notes selected  •  Prompt tokens: ${this.promptTokens}`;
+		this.tokenContainer.textContent = `Prompt tokens: ${this.promptTokens}`;
 		this.buttonMap = this.activateButtons();
 		
 		// Set initial button state
@@ -162,25 +189,65 @@ export default class SelectorModal extends Modal {
 
 	public onOpen(): void {
 		super.onOpen();
-		this.toggleButtons([SelectorModalButton.QUIZ, SelectorModalButton.GENERATE], true);
+		this.toggleButtons([SelectorModalButton.GENERATE], true);
 		this.updateActionLink();
+		
+		// Update model display in case settings changed
+		this.updateModelDisplay();
+		
+		// Ensure content selection mode is reflected in UI if it was set in constructor
+		if (this.contentSelectionContainer) {
+			const modeSelect = this.contentSelectionContainer.querySelector('select') as HTMLSelectElement;
+			if (modeSelect && modeSelect.value !== this.contentSelectionMode) {
+				modeSelect.value = this.contentSelectionMode;
+			}
+		}
+		
+		// Listen for window focus to update model display and question count when returning from settings
+		this.focusUpdateHandler = (): void => {
+			// Update model display and question count with latest settings
+			this.updateModelDisplay();
+		};
+		window.addEventListener("focus", this.focusUpdateHandler);
+	}
+
+	public onClose(): void {
+		// Clean up debounce timer if it exists
+		if (this.searchDebounceTimer) {
+			clearTimeout(this.searchDebounceTimer);
+			this.searchDebounceTimer = null;
+		}
+		// Remove focus event listener
+		if (this.focusUpdateHandler) {
+			window.removeEventListener("focus", this.focusUpdateHandler);
+			this.focusUpdateHandler = null;
+		}
+		// Reset loading cursor
+		this.loadingCursorCount = 0;
+		this.modalEl.style.cursor = "";
+		document.body.style.cursor = "";
+		super.onClose();
 	}
 
 	private activateButtons(): Record<SelectorModalButton, HTMLButtonElement> {
 		const buttonContainer = this.contentEl.createDiv("modal-button-container-qg");
-		const openQuizButton = buttonContainer.createEl("button", "modal-button-qg");
-		const generateQuizButton = buttonContainer.createEl("button", "modal-button-qg");
+		const generateQuizButton = buttonContainer.createEl("button", { cls: "modal-button-qg mod-cta" });
 		const buttonMap: Record<SelectorModalButton, HTMLButtonElement> = {
 			[SelectorModalButton.CLEAR]: generateQuizButton, // Placeholder to maintain enum structure
-			[SelectorModalButton.QUIZ]: openQuizButton,
+			[SelectorModalButton.QUIZ]: generateQuizButton, // Placeholder - button removed
 			[SelectorModalButton.FILTER]: generateQuizButton, // Reusing enum
 			[SelectorModalButton.GENERATE]: generateQuizButton,
 		};
 
-		setIconAndTooltip(openQuizButton, "scroll-text", "Open quiz");
-		setIconAndTooltip(generateQuizButton, "webhook", "Generate");
-		const openQuizHandler = async (): Promise<void> => await this.quiz?.renderQuiz();
+		// Set icon and text for generate button
+		setIcon(generateQuizButton, "webhook");
+		generateQuizButton.createSpan({ text: "Generate quiz" });
+		setTooltip(generateQuizButton, "Generate quiz from selected notes");
+		
 		const generateQuizHandler = async (): Promise<void> => {
+			// Update model display with latest settings before generation
+			this.updateModelDisplay();
+			
 			if (!this.validGenerationSettings()) {
 				if (this.promptTokens < this.MIN_TOKENS_FOR_QUIZ) {
 					new Notice(`Not enough content. Minimum ${this.MIN_TOKENS_FOR_QUIZ} tokens required for a 3-5 question quiz. Current: ${this.promptTokens} tokens.`);
@@ -197,6 +264,7 @@ export default class SelectorModal extends Modal {
 			}
 
 			this.toggleButtons([SelectorModalButton.GENERATE], true);
+			this.setLoadingCursor();
 
 			// Create and open progress modal
 			const progressModal = new ProgressModal(this.app);
@@ -216,11 +284,76 @@ export default class SelectorModal extends Modal {
 				}
 				
 				// Step 2: Sending to LLM
-				progressModal.updateProgress(2, `Sending to ${this.settings.provider}...`);
-				const generator = GeneratorFactory.createInstance(this.settings);
+				// Use latest settings from plugin (in case model was changed)
+				const currentSettings = this.plugin.settings;
+				
+				// Handle "surprise me" mode - randomize question type distribution
+				if (currentSettings.surpriseMe) {
+					const totalQuestions = currentSettings.numberOfTrueFalse +
+						currentSettings.numberOfMultipleChoice +
+						currentSettings.numberOfSelectAllThatApply +
+						currentSettings.numberOfFillInTheBlank +
+						currentSettings.numberOfMatching +
+						currentSettings.numberOfShortAnswer +
+						currentSettings.numberOfLongAnswer;
+					
+					if (totalQuestions > 0) {
+						// Randomly distribute questions across enabled types
+						const enabledTypes: Array<{key: keyof typeof currentSettings, generateKey: keyof typeof currentSettings}> = [
+							{ key: "numberOfTrueFalse", generateKey: "generateTrueFalse" },
+							{ key: "numberOfMultipleChoice", generateKey: "generateMultipleChoice" },
+							{ key: "numberOfSelectAllThatApply", generateKey: "generateSelectAllThatApply" },
+							{ key: "numberOfFillInTheBlank", generateKey: "generateFillInTheBlank" },
+							{ key: "numberOfMatching", generateKey: "generateMatching" },
+							{ key: "numberOfShortAnswer", generateKey: "generateShortAnswer" },
+							{ key: "numberOfLongAnswer", generateKey: "generateLongAnswer" },
+						];
+						
+						// Enable all types for surprise me
+						enabledTypes.forEach(type => {
+							(currentSettings[type.generateKey] as boolean) = true;
+						});
+						
+						// Randomly distribute total questions
+						const counts: number[] = new Array(enabledTypes.length).fill(0);
+						let remaining = totalQuestions;
+						
+						// Distribute randomly
+						for (let i = 0; i < totalQuestions; i++) {
+							const randomIndex = Math.floor(Math.random() * enabledTypes.length);
+							counts[randomIndex]++;
+						}
+						
+						// Apply counts (round down, but ensure sum equals total)
+						let sum = 0;
+						enabledTypes.forEach((type, index) => {
+							const count = counts[index];
+							(currentSettings[type.key] as number) = count;
+							sum += count;
+						});
+						
+						// Adjust for any rounding differences
+						if (sum !== totalQuestions) {
+							const diff = totalQuestions - sum;
+							// Add or subtract from random types
+							for (let i = 0; i < Math.abs(diff); i++) {
+								const randomIndex = Math.floor(Math.random() * enabledTypes.length);
+								const currentCount = (currentSettings[enabledTypes[randomIndex].key] as number);
+								if (diff > 0) {
+									(currentSettings[enabledTypes[randomIndex].key] as number) = currentCount + 1;
+								} else if (currentCount > 0) {
+									(currentSettings[enabledTypes[randomIndex].key] as number) = currentCount - 1;
+								}
+							}
+						}
+					}
+				}
+				
+				progressModal.updateProgress(2, `Sending to ${currentSettings.provider}...`);
+				const generator = GeneratorFactory.createInstance(currentSettings);
 				
 				// Step 3: Generating quiz (connected to API, waiting for generation to complete)
-				progressModal.updateProgress(3, `Connected to ${this.settings.provider}, generating quiz questions...`);
+				progressModal.updateProgress(3, `Connected to ${currentSettings.provider}, generating quiz questions...`);
 				
 				// Use prepared content if available, otherwise use selected notes
 				const contentToUse = this.preparedContent.size > 0 
@@ -249,7 +382,7 @@ export default class SelectorModal extends Modal {
 						questions.push(question);
 					} else if (isFillInTheBlank(question)) {
 						const normalizeBlanks = (str: string): string => {
-							return this.settings.provider !== Provider.COHERE ? str : str.replace(/_{2,}|\$_{2,}\$/g, "`____`");
+							return currentSettings.provider !== Provider.COHERE ? str : str.replace(/_{2,}|\$_{2,}\$/g, "`____`");
 						};
 						questions.push({ question: normalizeBlanks(question.question), answer: question.answer });
 					} else if (isMatching(question)) {
@@ -277,9 +410,8 @@ export default class SelectorModal extends Modal {
 				// Complete progress
 				progressModal.complete();
 
-				this.quiz = new QuizModalLogic(this.app, this.settings, questions, [...this.selectedNoteFiles.values()].flat(), undefined, undefined, undefined, this.plugin);
+				this.quiz = new QuizModalLogic(this.app, this.settings, questions, [...this.selectedNoteFiles.values()].flat(), undefined, undefined, undefined, this.plugin, this.contentSelectionMode);
 				await this.quiz.renderQuiz();
-				this.toggleButtons([SelectorModalButton.QUIZ], false);
 			} catch (error) {
 				progressModal.error((error as Error).message);
 				setTimeout(() => progressModal.close(), 2000);
@@ -288,29 +420,119 @@ export default class SelectorModal extends Modal {
 				this.toggleButtons([SelectorModalButton.GENERATE], false);
 				// Update button state after re-enabling (will disable again if not enough tokens)
 				this.updateGeneratorButtonState();
+				this.unsetLoadingCursor();
 			}
 		};
 
-		openQuizButton.addEventListener("click", openQuizHandler);
 		generateQuizButton.addEventListener("click", generateQuizHandler);
+
+		// Add model display beneath button
+		this.renderModelDisplay(buttonContainer);
 
 		return buttonMap;
 	}
-
-	private handleActionLinkClick(): void {
-		if (this.autoSelectMatching) {
-			// Reset filters
-			this.resetFilters();
-		} else {
-			// Deselect all
-			this.selectedNotes.clear();
-			this.selectedNoteFiles.clear();
-			this.selectedFilesContainer?.empty();
-			this.updatePromptTokens(0);
-			this.notePaths = this.app.vault.getMarkdownFiles().map(file => file.path);
-			this.folderPaths = this.app.vault.getAllFolders(true).map(folder => folder.path);
-			this.updateActionLink();
+	
+	private getCurrentModelName(): string {
+		// Use plugin settings directly to get latest values
+		const settings = this.plugin.settings;
+		const provider = settings.provider;
+		const providerName = providers[Provider[provider as keyof typeof Provider] as Provider] || provider;
+		
+		let modelName = "";
+		switch (provider) {
+			case Provider.OPENAI:
+				modelName = openAITextGenModels[settings.openAITextGenModel as keyof typeof openAITextGenModels] || settings.openAITextGenModel;
+				break;
+			case Provider.GOOGLE:
+				modelName = googleTextGenModels[settings.googleTextGenModel as keyof typeof googleTextGenModels] || settings.googleTextGenModel;
+				break;
+			case Provider.ANTHROPIC:
+				modelName = anthropicTextGenModels[settings.anthropicTextGenModel as keyof typeof anthropicTextGenModels] || settings.anthropicTextGenModel;
+				break;
+			case Provider.PERPLEXITY:
+				modelName = perplexityTextGenModels[settings.perplexityTextGenModel as keyof typeof perplexityTextGenModels] || settings.perplexityTextGenModel;
+				break;
+			case Provider.MISTRAL:
+				modelName = mistralTextGenModels[settings.mistralTextGenModel as keyof typeof mistralTextGenModels] || settings.mistralTextGenModel;
+				break;
+			case Provider.COHERE:
+				modelName = cohereTextGenModels[settings.cohereTextGenModel as keyof typeof cohereTextGenModels] || settings.cohereTextGenModel;
+				break;
+			case Provider.OLLAMA:
+				modelName = settings.ollamaTextGenModel || "Not set";
+				break;
+			default:
+				modelName = "Unknown";
 		}
+		
+		return `${providerName}: ${modelName}`;
+	}
+	
+	private renderModelDisplay(container: HTMLElement): void {
+		const modelContainer = container.createDiv("model-display-container-qg");
+		this.modelDisplayLink = modelContainer.createEl("a", {
+			cls: "model-display-link-qg",
+			text: this.getCurrentModelName()
+		});
+		this.modelDisplayLink.setAttribute("href", "#");
+		this.modelDisplayLink.setAttribute("title", "Click to change model in settings");
+		
+		this.modelDisplayLink.addEventListener("click", (e) => {
+			e.preventDefault();
+			// Open settings and navigate to model settings
+			(this.app as any).setting.open();
+			(this.app as any).setting.openTabById("quiz-generator");
+		});
+		
+		// Add total question count display
+		const questionCountContainer = container.createDiv("question-count-container-qg");
+		this.questionCountElement = questionCountContainer.createSpan("question-count-text-qg");
+		this.updateQuestionCount(this.questionCountElement);
+	}
+	
+	private calculateTotalQuestions(): number {
+		const settings = this.plugin.settings;
+		let total = 0;
+		if (settings.generateTrueFalse) total += settings.numberOfTrueFalse;
+		if (settings.generateMultipleChoice) total += settings.numberOfMultipleChoice;
+		if (settings.generateSelectAllThatApply) total += settings.numberOfSelectAllThatApply;
+		if (settings.generateFillInTheBlank) total += settings.numberOfFillInTheBlank;
+		if (settings.generateMatching) total += settings.numberOfMatching;
+		if (settings.generateShortAnswer) total += settings.numberOfShortAnswer;
+		if (settings.generateLongAnswer) total += settings.numberOfLongAnswer;
+		return total;
+	}
+	
+	private updateQuestionCount(element: HTMLElement): void {
+		const total = this.calculateTotalQuestions();
+		element.textContent = `Total questions: ${total}`;
+	}
+	
+	private updateModelDisplay(): void {
+		if (this.modelDisplayLink) {
+			this.modelDisplayLink.textContent = this.getCurrentModelName();
+		}
+		if (this.questionCountElement) {
+			this.updateQuestionCount(this.questionCountElement);
+		}
+	}
+
+	private async handleActionLinkClick(): Promise<void> {
+		// Deselect all
+		this.selectedNotes.clear();
+		this.selectedNoteFiles.clear();
+		this.selectedFilesContainer?.empty();
+		this.noteTokenElements.clear();
+		this.noteItemContainers.clear();
+		this.preparedContent.clear();
+		this.backlinkMap.clear();
+		this.backlinkContent.clear();
+		this.updatePromptTokens(0);
+		this.notePaths = this.app.vault.getMarkdownFiles().map(file => file.path);
+		this.folderPaths = this.app.vault.getAllFolders(true).map(folder => folder.path);
+		this.updateActionLink();
+		// Refresh search results to show deselected files
+		await this.performSearch();
 	}
 
 	private updateActionLink(): void {
@@ -322,7 +544,7 @@ export default class SelectorModal extends Modal {
 		if (hasSelectedItems) {
 			this.selectedFilesHeader.style.display = "";
 			this.actionLink.style.display = "";
-			this.actionLink.textContent = this.autoSelectMatching ? "Reset filters" : "Deselect all";
+			this.actionLink.textContent = "Deselect all";
 		} else {
 			this.selectedFilesHeader.style.display = "none";
 		}
@@ -388,9 +610,33 @@ export default class SelectorModal extends Modal {
 			this.resetFilters();
 		});
 		
-		searchInput.addEventListener("input", async (e) => {
+		// Debounced search on input
+		searchInput.addEventListener("input", (e) => {
 			this.searchQuery = (e.target as HTMLInputElement).value;
 			this.updateClearButtonVisibility();
+			this.updateSaveButtonState();
+			
+			// Clear existing timer
+			if (this.searchDebounceTimer) {
+				clearTimeout(this.searchDebounceTimer);
+				this.searchDebounceTimer = null;
+			}
+			
+			// Set new timer to perform search after 2 seconds of no typing
+			this.searchDebounceTimer = setTimeout(async () => {
+				await this.performSearch();
+				this.searchDebounceTimer = null;
+			}, 2000);
+		});
+		
+		// Immediate search on blur (when input loses focus)
+		searchInput.addEventListener("blur", async () => {
+			// Clear any pending debounce timer
+			if (this.searchDebounceTimer) {
+				clearTimeout(this.searchDebounceTimer);
+				this.searchDebounceTimer = null;
+			}
+			// Perform search immediately
 			await this.performSearch();
 		});
 		
@@ -413,28 +659,38 @@ export default class SelectorModal extends Modal {
 		}
 		
 		// Save button
-		const saveBtn = inputButtons.createEl("button", {
+		this.saveSearchBtn = inputButtons.createEl("button", {
 			cls: "search-inline-btn-qg"
 		});
-		setIconAndTooltip(saveBtn, "bookmark-plus", "Save current search");
+		setIconAndTooltip(this.saveSearchBtn, "bookmark-plus", "Save current search");
 		
-		saveBtn.addEventListener("click", () => {
+		this.saveSearchBtn.addEventListener("click", () => {
 			this.showBookmarkDialog();
 		});
+		
+		// Update initial button state
+		this.updateSaveButtonState();
 		
 		// Secondary row for advanced link only
 		const secondaryRow = this.searchContainer.createDiv("search-secondary-row-qg");
 		
 		// Advanced link
 		const advancedLink = secondaryRow.createEl("a", {
-			text: "Advanced",
 			cls: "advanced-toggle-link-qg"
 		});
+		
+		// Add cog icon
+		const cogIcon = advancedLink.createSpan("advanced-icon-qg");
+		setIcon(cogIcon, "settings");
+		
+		// Add text
+		const linkText = advancedLink.createSpan("advanced-text-qg");
+		linkText.textContent = "Advanced";
 		
 		advancedLink.addEventListener("click", (e) => {
 			e.preventDefault();
 			this.showAdvanced = !this.showAdvanced;
-			advancedLink.textContent = this.showAdvanced ? "Hide Advanced" : "Advanced";
+			linkText.textContent = this.showAdvanced ? "Hide Advanced" : "Advanced";
 			this.toggleAdvancedFilters();
 		});
 		
@@ -445,22 +701,28 @@ export default class SelectorModal extends Modal {
 	}
 
 	private async performSearch(): Promise<void> {
-		// If no search query and no advanced filters, show empty state
-		if (!this.searchQuery.trim() && !this.filterTag && !this.filterFolder && this.filterDate === "any") {
-			this.searchResultsContainer!.empty();
-			this.searchResultsContainer!.style.display = "block";
-			const emptyMessage = this.searchResultsContainer!.createDiv("search-results-empty-qg");
-			emptyMessage.textContent = "No notes found or currently unselected";
-			return;
-		}
+		// Show loading indicator and disable interactions
+		this.showSearchLoading();
+		this.setLoadingCursor();
+		
+		try {
+			// If no search query and no advanced filters, show empty state
+			if (!this.searchQuery.trim() && !this.filterTag && !this.filterFolder && this.filterDate === "any") {
+				this.searchResultsContainer!.empty();
+				this.searchResultsContainer!.style.display = "block";
+				const emptyMessage = this.searchResultsContainer!.createDiv("search-results-empty-qg");
+				emptyMessage.textContent = "No notes found or currently unselected";
+				this.hideSearchLoading();
+				return;
+			}
 
 		// Step 1: Filter files by basic criteria (text, tag, folder, date)
 		const allFiles = this.app.vault.getMarkdownFiles();
 		const query = this.searchQuery.toLowerCase();
 		
 		const matchingFiles = allFiles.filter(file => {
-			// Skip already selected files (only relevant when auto-select is off)
-			if (!this.autoSelectMatching && this.selectedNoteFiles.has(file.path)) return false;
+			// Skip already selected files
+			if (this.selectedNoteFiles.has(file.path)) return false;
 			
 			// Text search filter
 			const matchesQuery = !this.searchQuery.trim() || 
@@ -508,13 +770,20 @@ export default class SelectorModal extends Modal {
 					if (!lastQuizDate || new Date(file.stat.mtime) < lastQuizDate) {
 						return false;
 					}
+				} else if (this.filterDate === "custom" && this.customFilterDate) {
+					// Filter by custom specified date
+					if (new Date(file.stat.mtime) < this.customFilterDate) {
+						return false;
+					}
 				} else {
 					// Filter by days (supports fractional days for hours)
 					const days = parseFloat(this.filterDate);
-					const msAgo = days * 24 * 60 * 60 * 1000;
-					const daysAgo = new Date(Date.now() - msAgo);
-					if (new Date(file.stat.mtime) < daysAgo) {
-						return false;
+					if (!isNaN(days)) {
+						const msAgo = days * 24 * 60 * 60 * 1000;
+						const daysAgo = new Date(Date.now() - msAgo);
+						if (new Date(file.stat.mtime) < daysAgo) {
+							return false;
+						}
 					}
 				}
 			}
@@ -559,64 +828,60 @@ export default class SelectorModal extends Modal {
 		// Step 3: Filter out files with 0 tokens - these don't have relevant content
 		// ONLY files with tokens > 0 are eligible for selection
 		const filesWithNonZeroTokens = filesWithTokenData
-			.filter(({ tokens }) => tokens > 0);
+			.filter(({ tokens }) => tokens > 0)
+			.sort((a, b) => {
+				// Sort by last modified date, newest first (descending)
+				return b.file.stat.mtime - a.file.stat.mtime;
+			});
 
-		// Step 4: Handle auto-select if enabled (ONLY select files that have tokens)
-		if (this.autoSelectMatching && filesWithNonZeroTokens.length > 0) {
-			// Clear previous selections when auto-select is enabled
-			this.selectedNotes.clear();
-			this.selectedNoteFiles.clear();
-			this.selectedFilesContainer?.empty();
-			this.noteTokenElements.clear();
-			this.noteItemContainers.clear();
-			this.preparedContent.clear();
-			this.updatePromptTokens(0);
-			
-			// Add all files with tokens to selection, using pre-calculated content
-			for (const { file, content, tokens } of filesWithNonZeroTokens) {
-				// Skip if already selected (shouldn't happen, but safety check)
-				if (this.selectedNoteFiles.has(file.path)) continue;
-				
-				this.notePaths = this.notePaths.filter(notePath => notePath !== file.path);
-				this.selectedNoteFiles.set(file.path, [file]);
-				this.selectedNotes.set(file.path, content);
-				this.preparedContent.set(file.path, content);
-				
-				// Render the note immediately with known token count
-				this.renderNote(file);
-				
-				// Track filtered tags for removal if enabled
-				if (this.filterTag && this.removeFilteredTags) {
-					const tags = this.filterTag
-						.split(',')
-						.map(tag => tag.trim())
-						.filter(tag => tag.length > 0)
-						.map(tag => tag.startsWith("#") ? tag : `#${tag}`);
-					tags.forEach(tag => this.filteredTagsToRemove.add(tag));
-				}
-			}
-			
-			// Update total token count
-			const totalTokens = filesWithNonZeroTokens.reduce((sum, { tokens }) => sum + tokens, 0);
-			this.promptTokens = totalTokens;
-			this.updatePromptTokens(totalTokens);
-			
-			// Show message
-			this.searchResultsContainer!.empty();
-			this.searchResultsContainer!.style.display = "block";
-			const header = this.searchResultsContainer!.createDiv("search-results-header-qg");
-			header.textContent = `Auto-selected ${filesWithNonZeroTokens.length} note${filesWithNonZeroTokens.length !== 1 ? 's' : ''} matching criteria`;
-			return;
-		}
-		
-		// Step 5: Display search results (ONLY files with tokens, limit to first 20)
-		// These files are already tokenized and guaranteed to have tokens > 0
+		// Step 4: Display search results (ONLY files with tokens, limit to first 20)
+		// These files are already tokenized and guaranteed to have tokens > 0, sorted by newest first
 		const displayFiles = filesWithNonZeroTokens.slice(0, 20);
 		
 		this.searchResultsContainer!.empty();
 		
 		if (displayFiles.length > 0) {
 			this.searchResultsContainer!.style.display = "block";
+			
+			// Add "Add all" button at the top of search results
+			const addAllRow = this.searchResultsContainer!.createDiv("search-results-add-all-qg");
+			const addAllLink = addAllRow.createEl("a", {
+				cls: "add-all-link-qg",
+				text: `Add all (${filesWithNonZeroTokens.length})`
+			});
+			addAllLink.addEventListener("click", async () => {
+				// Add all files with tokens to selection, using pre-calculated content
+				for (const { file, content } of filesWithNonZeroTokens) {
+					// Skip if already selected
+					if (this.selectedNoteFiles.has(file.path)) continue;
+					
+					this.notePaths = this.notePaths.filter(notePath => notePath !== file.path);
+					this.selectedNoteFiles.set(file.path, [file]);
+					this.selectedNotes.set(file.path, content);
+					this.preparedContent.set(file.path, content);
+					
+					// Render the note immediately
+					this.renderNote(file);
+					
+					// Track filtered tags for removal if enabled
+					if (this.filterTag && this.removeFilteredTags) {
+						const tags = this.filterTag
+							.split(',')
+							.map(tag => tag.trim())
+							.filter(tag => tag.length > 0)
+							.map(tag => tag.startsWith("#") ? tag : `#${tag}`);
+						tags.forEach(tag => this.filteredTagsToRemove.add(tag));
+					}
+				}
+				
+				// Update total token count (including backlinks if enabled)
+				const totalTokens = this.calculateTotalTokens();
+				this.updatePromptTokens(totalTokens);
+				this.updateActionLink();
+				
+				// Refresh search results to remove added files
+				await this.performSearch();
+			});
 			
 			displayFiles.forEach(({ file, content, tokens }) => {
 				const resultItem = this.searchResultsContainer!.createDiv("search-result-item-qg");
@@ -652,10 +917,8 @@ export default class SelectorModal extends Modal {
 						tags.forEach(tag => this.filteredTagsToRemove.add(tag));
 					}
 					
-					// Update total token count
-					const totalTokens = [...this.selectedNotes.values()].reduce((sum, c) => {
-						return sum + countNoteTokens(c);
-					}, 0);
+					// Update total token count (including backlinks if enabled)
+					const totalTokens = this.calculateTotalTokens();
 					this.updatePromptTokens(totalTokens);
 					
 					// Refresh search results to remove the clicked file
@@ -672,6 +935,58 @@ export default class SelectorModal extends Modal {
 			this.searchResultsContainer!.style.display = "block";
 			const emptyMessage = this.searchResultsContainer!.createDiv("search-results-empty-qg");
 			emptyMessage.textContent = "No notes found or currently unselected";
+		}
+		} finally {
+			// Hide loading indicator and re-enable interactions
+			this.hideSearchLoading();
+			this.unsetLoadingCursor();
+		}
+	}
+	
+	private showSearchLoading(): void {
+		if (this.isSearching) return; // Already showing loading
+		this.isSearching = true;
+		if (this.searchLoadingOverlay) {
+			this.searchLoadingOverlay.style.display = "flex";
+		}
+		// Disable pointer events on left column
+		const leftColumn = this.itemContainer.querySelector(".column-left-qg") as HTMLElement;
+		if (leftColumn) {
+			leftColumn.style.pointerEvents = "none";
+			leftColumn.style.opacity = "0.6";
+		}
+	}
+	
+	private hideSearchLoading(): void {
+		if (!this.isSearching) return; // Already hidden
+		this.isSearching = false;
+		if (this.searchLoadingOverlay) {
+			this.searchLoadingOverlay.style.display = "none";
+		}
+		// Re-enable pointer events on left column
+		const leftColumn = this.itemContainer.querySelector(".column-left-qg") as HTMLElement;
+		if (leftColumn) {
+			leftColumn.style.pointerEvents = "";
+			leftColumn.style.opacity = "";
+		}
+	}
+	
+	private setLoadingCursor(): void {
+		this.loadingCursorCount++;
+		if (this.loadingCursorCount === 1) {
+			// First loading operation - set cursor
+			this.modalEl.style.cursor = "wait";
+			document.body.style.cursor = "wait";
+		}
+	}
+	
+	private unsetLoadingCursor(): void {
+		this.loadingCursorCount--;
+		if (this.loadingCursorCount <= 0) {
+			// All loading operations complete - reset cursor
+			this.loadingCursorCount = 0;
+			this.modalEl.style.cursor = "";
+			document.body.style.cursor = "";
 		}
 	}
 
@@ -739,6 +1054,10 @@ export default class SelectorModal extends Modal {
 		const backlinkContents: string[] = [];
 		const processedFiles = new Set<string>(); // Track processed files to avoid duplicates
 		
+		// Clear existing backlink maps
+		this.backlinkMap.clear();
+		this.backlinkContent.clear();
+		
 		// Get all resolved links in the vault
 		const resolvedLinks = this.app.metadataCache.resolvedLinks;
 		
@@ -749,6 +1068,7 @@ export default class SelectorModal extends Modal {
 		for (const files of this.selectedNoteFiles.values()) {
 			for (const file of files) {
 				const targetPath = file.path;
+				const backlinks: TFile[] = [];
 				
 				// Find all files that link to this file
 				for (const [sourcePath, links] of Object.entries(resolvedLinks)) {
@@ -785,11 +1105,19 @@ export default class SelectorModal extends Modal {
 							content = cleanUpNoteContents(fullContent, hasFrontMatter);
 						}
 						
+						// Store backlink file and content
+						backlinks.push(backlinkFile);
+						this.backlinkContent.set(backlinkFile.path, content);
 						backlinkContents.push(content);
 						processedFiles.add(sourcePath);
 					} catch (error) {
 						console.error(`Error reading backlink file ${sourcePath}:`, error);
 					}
+				}
+				
+				// Store backlinks for this parent note
+				if (backlinks.length > 0) {
+					this.backlinkMap.set(targetPath, backlinks);
 				}
 			}
 		}
@@ -803,10 +1131,10 @@ export default class SelectorModal extends Modal {
 		this.filterTag = "";
 		this.filterFolder = "";
 		this.filterDate = "any";
+		this.customFilterDate = null;
 		this.removeFilteredTags = false;
 		this.filteredTagsToRemove.clear();
 		this.showAdvanced = false;
-		this.autoSelectMatching = false;
 		
 		// Reset auto-tag settings
 		this.autoTagEnabled = false;
@@ -816,6 +1144,9 @@ export default class SelectorModal extends Modal {
 		// Reset content selection and backlinks
 		this.contentSelectionMode = ContentSelectionMode.FULL_PAGE;
 		this.includeBacklinks = false;
+		
+		// Update button state after reset
+		this.updateSaveButtonState();
 		
 		// Clear all selected notes
 		this.selectedNotes.clear();
@@ -834,10 +1165,9 @@ export default class SelectorModal extends Modal {
 			this.searchResultsContainer.style.display = "none";
 		}
 		
-		// Re-render the search bar, content selection, backlinks, and auto-tag UI
+		// Re-render the search bar, content selection, and auto-tag UI
 		this.renderSearchBar();
 		this.renderContentSelectionUI();
-		this.renderBacklinksUI();
 		this.renderAutoTagUI();
 		
 		// Update action link text
@@ -862,6 +1192,7 @@ export default class SelectorModal extends Modal {
 			this.filterTag = (e.target as HTMLInputElement).value;
 			this.updateRemoveTagsCheckboxState();
 			this.updateClearButtonVisibility();
+			this.updateSaveButtonState();
 			await this.performSearch();
 		});
 		
@@ -877,6 +1208,7 @@ export default class SelectorModal extends Modal {
 		folderInput.addEventListener("input", async (e) => {
 			this.filterFolder = (e.target as HTMLInputElement).value;
 			this.updateClearButtonVisibility();
+			this.updateSaveButtonState();
 			await this.performSearch();
 		});
 		
@@ -886,27 +1218,109 @@ export default class SelectorModal extends Modal {
 		const dateSelect = dateRow.createEl("select", { cls: "filter-select-compact-qg" });
 		[
 			{ value: "any", label: "Any time" },
-			{ value: "last-quiz", label: "Last quiz was generated" },
+			{ value: "last-quiz", label: "Since last quiz was generated" },
 			{ value: "0.04167", label: "Last 1 hour" },
-			{ value: "0.25", label: "Last 6 hours" },
+			{ value: "0.5", label: "Last 12 hours" },
 			{ value: "1", label: "Last 24 hours" },
 			{ value: "7", label: "Last 7 days" },
 			{ value: "30", label: "Last 30 days" },
-			{ value: "365", label: "Last year" }
+			{ value: "custom", label: "Since specified date..." }
 		].forEach(opt => {
 			const option = dateSelect.createEl("option", { text: opt.label });
 			option.value = opt.value;
-			if (opt.value === this.filterDate) {
+			// Check if current filterDate matches this option or if it's a custom date
+			if (opt.value === this.filterDate || (opt.value === "custom" && this.filterDate === "custom")) {
 				option.selected = true;
 			}
 		});
+		
+		// Date/time picker container (initially hidden)
+		const dateTimePickerContainer = filterGroup.createDiv("date-time-picker-container-qg");
+		dateTimePickerContainer.style.display = "none";
+		
+		// Use Obsidian's Setting component for native date picker
+		let dateTextComponent: TextComponent;
+		let timeTextComponent: TextComponent;
+		
+		const dateSetting = new Setting(dateTimePickerContainer)
+			.setName("Date")
+			.addText((text) => {
+				dateTextComponent = text;
+				const dateValue = this.customFilterDate ? this.formatDateForInput(this.customFilterDate) : this.formatDateForInput(new Date());
+				text.inputEl.type = "date";
+				text.setValue(dateValue);
+				text.onChange(async (value) => {
+					if (value && timeTextComponent) {
+						const timeValue = timeTextComponent.inputEl.value || this.formatTimeForInput(new Date());
+						const [year, month, day] = value.split('-').map(Number);
+						const [hours, minutes] = timeValue.split(':').map(Number);
+						this.customFilterDate = new Date(year, month - 1, day, hours, minutes);
+						this.updateSaveButtonState();
+						if (this.filterDate === "custom") {
+							await this.performSearch();
+						}
+					}
+				});
+			});
+		
+		const timeSetting = new Setting(dateTimePickerContainer)
+			.setName("Time")
+			.addText((text) => {
+				timeTextComponent = text;
+				const timeValue = this.customFilterDate ? this.formatTimeForInput(this.customFilterDate) : this.formatTimeForInput(new Date());
+				text.inputEl.type = "time";
+				text.setValue(timeValue);
+				text.onChange(async (value) => {
+					if (value && dateTextComponent) {
+						const dateValue = dateTextComponent.inputEl.value || this.formatDateForInput(new Date());
+						const [year, month, day] = dateValue.split('-').map(Number);
+						const [hours, minutes] = value.split(':').map(Number);
+						this.customFilterDate = new Date(year, month - 1, day, hours, minutes);
+						this.updateSaveButtonState();
+						if (this.filterDate === "custom") {
+							await this.performSearch();
+						}
+					}
+				});
+			});
+		
 		dateSelect.addEventListener("change", async (e) => {
-			this.filterDate = (e.target as HTMLSelectElement).value;
+			const newValue = (e.target as HTMLSelectElement).value;
+			this.filterDate = newValue;
+			
+			// Show/hide date/time picker
+			if (newValue === "custom") {
+				dateTimePickerContainer.style.display = "block";
+				// Initialize with current date/time if not set
+				if (!this.customFilterDate) {
+					this.customFilterDate = new Date();
+					if (dateTextComponent) {
+						dateTextComponent.setValue(this.formatDateForInput(this.customFilterDate));
+					}
+					if (timeTextComponent) {
+						timeTextComponent.setValue(this.formatTimeForInput(this.customFilterDate));
+					}
+				}
+			} else {
+				dateTimePickerContainer.style.display = "none";
+				this.customFilterDate = null;
+			}
+			
 			this.updateClearButtonVisibility();
+			this.updateSaveButtonState();
 			// Re-render content selection UI to enable/disable options based on date filter
 			this.renderContentSelectionUI();
 			await this.performSearch();
 		});
+		
+		// Show date/time picker if custom is already selected
+		if (this.filterDate === "custom") {
+			dateTimePickerContainer.style.display = "block";
+			if (!this.customFilterDate) {
+				this.customFilterDate = new Date();
+			}
+			// Values are already set in the addText callbacks above
+		}
 		
 		// Remove filtered tags option
 		const removeTagsRow = filterGroup.createDiv("filter-row-compact-qg");
@@ -914,30 +1328,13 @@ export default class SelectorModal extends Modal {
 		this.removeTagsCheckbox.checked = this.removeFilteredTags;
 		this.removeTagsCheckbox.addEventListener("change", (e) => {
 			this.removeFilteredTags = (e.target as HTMLInputElement).checked;
+			this.updateSaveButtonState();
 		});
 		removeTagsRow.createSpan({ text: "Remove filtered tags from notes upon generation", cls: "filter-checkbox-label-qg" });
 		
 		// Set initial disabled state based on whether there are tags
 		this.updateRemoveTagsCheckboxState();
 		
-		// Auto-select matching option
-		const autoSelectRow = filterGroup.createDiv("filter-row-compact-qg");
-		const autoSelectCheckbox = autoSelectRow.createEl("input", { type: "checkbox", cls: "filter-checkbox-compact-qg" });
-		autoSelectCheckbox.checked = this.autoSelectMatching;
-		autoSelectCheckbox.addEventListener("change", async (e) => {
-			this.autoSelectMatching = (e.target as HTMLInputElement).checked;
-			this.updateActionLink();
-			
-			if (this.autoSelectMatching) {
-				// When enabled, apply auto-selection immediately
-				await this.performSearch();
-			} else {
-				// When disabled, refresh search results to show all matching files
-				// This will also hide the "Auto-selected x notes" message
-				await this.performSearch();
-			}
-		});
-		autoSelectRow.createSpan({ text: "Auto-select all that match criteria", cls: "filter-checkbox-label-qg" });
 		}
 
 
@@ -945,6 +1342,267 @@ export default class SelectorModal extends Modal {
 		const tokens = this.renderNoteOrFolder(note, this.settings.showNotePath ? note.path : note.basename);
 		this.toggleButtons([SelectorModalButton.GENERATE], false);
 		this.updatePromptTokens(this.promptTokens + tokens);
+		
+		// Render backlinks if enabled
+		if (this.includeBacklinks) {
+			this.renderBacklinksForNote(note);
+		}
+	}
+	
+	private async renderBacklinksForNote(parentNote: TFile): Promise<void> {
+		// Collect backlinks if not already collected
+		const wasEmpty = this.backlinkMap.size === 0;
+		if (wasEmpty) {
+			await this.collectBacklinkContents();
+		}
+		
+		const backlinks = this.backlinkMap.get(parentNote.path);
+		if (!backlinks || backlinks.length === 0) return;
+		
+		// Find the parent note's container
+		const parentContainer = this.noteItemContainers.get(parentNote.path);
+		if (!parentContainer) return;
+		
+		// Create a container for backlinks (nested under parent)
+		const backlinksContainer = parentContainer.createDiv("backlinks-container-qg");
+		
+		// Render each backlink
+		for (const backlink of backlinks) {
+			const backlinkContent = this.backlinkContent.get(backlink.path);
+			if (backlinkContent === undefined) continue;
+			
+			this.renderBacklinkItem(backlink, backlinkContent, backlinksContainer);
+		}
+		
+		// Update token count if backlinks were just collected
+		if (wasEmpty) {
+			const totalTokens = this.calculateTotalTokens();
+			this.updatePromptTokens(totalTokens);
+		}
+	}
+	
+	private renderBacklinkItem(backlink: TFile, content: string, container: HTMLElement): void {
+		const itemContainer = container.createDiv("item-qg backlink-item-qg");
+		
+		// Store backlink path and basename in const to ensure correct closure capture
+		const backlinkPath = backlink.path;
+		const backlinkBasename = backlink.basename;
+		
+		// Add spacer to align with parent's checkmark position (for visual alignment)
+		const spacer = itemContainer.createSpan("item-checkmark-spacer-qg");
+		spacer.style.width = "16px";
+		spacer.style.flexShrink = "0";
+		
+		// Add file name
+		const fileNameSpan = itemContainer.createSpan("item-name-qg");
+		fileNameSpan.textContent = this.settings.showNotePath ? backlinkPath : backlinkBasename;
+		
+		const tokensElement = itemContainer.createDiv("item-tokens-qg");
+		const tokens = countNoteTokens(content);
+		tokensElement.textContent = tokens + " tokens";
+		
+		// Store reference for styling
+		this.noteTokenElements.set(`backlink:${backlinkPath}`, tokensElement);
+		this.updateItemStyling(`backlink:${backlinkPath}`, tokens);
+		
+		// Preview button with same functionality as main notes
+		const viewContentsButton = itemContainer.createEl("button", "item-button-qg");
+		setIconAndTooltip(viewContentsButton, "eye", "View contents");
+		
+		// Disabled hyperlink icon instead of remove button - align with parent's X button
+		const backlinkIndicator = itemContainer.createEl("button", "item-button-qg backlink-indicator-qg");
+		backlinkIndicator.disabled = true;
+		backlinkIndicator.style.opacity = "0.5";
+		backlinkIndicator.style.cursor = "default";
+		setIcon(backlinkIndicator, "link");
+		setTooltip(backlinkIndicator, "Included as a backlink");
+		
+		let popover: HTMLElement | null = null;
+		let popoverTimeout: NodeJS.Timeout | null = null;
+		let isPopoverPinned = false;
+		let handleClickOutside: ((event: MouseEvent) => void) | null = null;
+		
+		const showPopover = async (e?: Event): Promise<void> => {
+			if (e) {
+				e.stopPropagation();
+				e.preventDefault();
+			}
+			
+			// Close any existing active popover
+			if (this.activePreviewPopover && this.activePreviewPopover !== popover) {
+				this.activePreviewPopover.style.display = "none";
+				if (this.activePopoverClickOutsideHandler) {
+					document.removeEventListener("click", this.activePopoverClickOutsideHandler);
+					this.activePopoverClickOutsideHandler = null;
+				}
+				this.activePreviewPopover = null;
+			}
+			
+			if (popoverTimeout) {
+				clearTimeout(popoverTimeout);
+				popoverTimeout = null;
+			}
+			
+			if (popover && popover.style.display !== "none" && popover.style.display !== "") {
+				popover.style.display = "none";
+				isPopoverPinned = false;
+				if (handleClickOutside) {
+					document.removeEventListener("click", handleClickOutside);
+				}
+				if (this.activePreviewPopover === popover) {
+					this.activePreviewPopover = null;
+					this.activePopoverClickOutsideHandler = null;
+				}
+				return;
+			}
+			
+			if (popover) {
+				// Refresh content - use backlinkPath to ensure correct backlink
+				const newContent = this.backlinkContent.get(backlinkPath) || "";
+				const newTitle = newContent.trim().length > 0 
+					? `${backlinkBasename} (Backlink - Prepared Content)`
+					: backlinkBasename;
+				
+				const titleEl = popover.querySelector(".content-preview-title-qg");
+				if (titleEl) {
+					titleEl.textContent = newTitle;
+				}
+				
+				const contentArea = popover.querySelector(".content-preview-content-qg");
+				if (contentArea) {
+					contentArea.empty();
+					if (newContent.trim().length === 0) {
+						contentArea.createEl("p", { 
+							text: "No changes detected for the selected time period.",
+							cls: "no-content-message-qg"
+						});
+					} else {
+						const codeBlock = contentArea.createEl("pre", { cls: "content-preview-markdown-qg" });
+						const codeEl = codeBlock.createEl("code", { cls: "language-markdown" });
+						codeEl.textContent = newContent;
+					}
+				}
+				
+				popover.style.display = "block";
+				isPopoverPinned = true;
+				this.activePreviewPopover = popover;
+				this.activePopoverClickOutsideHandler = handleClickOutside;
+				if (handleClickOutside) {
+					setTimeout(() => {
+						document.addEventListener("click", handleClickOutside!);
+					}, 0);
+				}
+				return;
+			}
+			
+			// Create new popover - use backlinkPath to ensure correct backlink
+			popover = document.body.createDiv("content-preview-popover-qg");
+			popover.style.display = "block";
+			
+			const preparedContent = this.backlinkContent.get(backlinkPath) || "";
+			const title = preparedContent.trim().length > 0 
+				? `${backlinkBasename} (Backlink - Prepared Content)`
+				: backlinkBasename;
+			
+			const rect = viewContentsButton.getBoundingClientRect();
+			popover.style.position = "fixed";
+			
+			const popoverWidth = 500;
+			const spaceRight = window.innerWidth - rect.right;
+			const spaceLeft = rect.left;
+			
+			if (spaceRight >= popoverWidth + 20) {
+				popover.style.left = `${rect.right + 10}px`;
+			} else if (spaceLeft >= popoverWidth + 20) {
+				popover.style.left = `${rect.left - popoverWidth - 10}px`;
+			} else {
+				popover.style.left = `${rect.right + 10}px`;
+				popover.style.maxWidth = `${Math.max(300, spaceRight - 20)}px`;
+			}
+			
+			const popoverHeight = 600;
+			const spaceBelow = window.innerHeight - rect.top;
+			if (spaceBelow < popoverHeight) {
+				popover.style.top = `${Math.max(10, window.innerHeight - popoverHeight - 10)}px`;
+			} else {
+				popover.style.top = `${rect.top}px`;
+			}
+			
+			popover.style.maxWidth = "500px";
+			popover.style.maxHeight = "600px";
+			popover.style.zIndex = "10000";
+			
+			const titleEl = popover.createEl("div", { cls: "content-preview-title-qg" });
+			titleEl.setText(title);
+			
+			const contentArea = popover.createDiv("content-preview-content-qg");
+			
+			if (preparedContent.trim().length === 0) {
+				contentArea.createEl("p", { 
+					text: "No changes detected for the selected time period.",
+					cls: "no-content-message-qg"
+				});
+			} else {
+				const codeBlock = contentArea.createEl("pre", { cls: "content-preview-markdown-qg" });
+				const codeEl = codeBlock.createEl("code", { cls: "language-markdown" });
+				codeEl.textContent = preparedContent;
+			}
+			
+			isPopoverPinned = true;
+			
+			handleClickOutside = (event: MouseEvent): void => {
+				if (popover && isPopoverPinned && 
+					!popover.contains(event.target as Node) && 
+					!viewContentsButton.contains(event.target as Node)) {
+					popover.style.display = "none";
+					isPopoverPinned = false;
+					if (handleClickOutside) {
+						document.removeEventListener("click", handleClickOutside);
+					}
+					if (this.activePreviewPopover === popover) {
+						this.activePreviewPopover = null;
+						this.activePopoverClickOutsideHandler = null;
+					}
+				}
+			};
+			
+			const hidePopover = (): void => {
+				if (isPopoverPinned) return;
+				if (popoverTimeout) {
+					clearTimeout(popoverTimeout);
+				}
+				popoverTimeout = setTimeout(() => {
+					if (popover && !isPopoverPinned) {
+						popover.style.display = "none";
+					}
+				}, 200);
+			};
+			
+			const showPopoverOnHover = (): void => {
+				if (popoverTimeout) {
+					clearTimeout(popoverTimeout);
+					popoverTimeout = null;
+				}
+				if (popover && !isPopoverPinned) {
+					popover.style.display = "block";
+				}
+			};
+			
+			viewContentsButton.addEventListener("mouseenter", showPopoverOnHover);
+			viewContentsButton.addEventListener("mouseleave", hidePopover);
+			popover.addEventListener("mouseenter", showPopoverOnHover);
+			popover.addEventListener("mouseleave", hidePopover);
+			
+			this.activePreviewPopover = popover;
+			this.activePopoverClickOutsideHandler = handleClickOutside;
+			if (handleClickOutside) {
+				setTimeout(() => {
+					document.addEventListener("click", handleClickOutside!);
+				}, 0);
+			}
+		};
+		
+		viewContentsButton.addEventListener("click", (e) => showPopover(e));
 	}
 
 	private renderNoteOrFolder(item: TFile | TFolder, fileName: string): number {
@@ -1259,8 +1917,8 @@ export default class SelectorModal extends Modal {
 		// Update action link visibility
 		this.updateActionLink();
 		
-		// If auto-select is off, check if the removed item should be added back to search results
-		if (!this.autoSelectMatching && item instanceof TFile) {
+		// Check if the removed item should be added back to search results
+		if (item instanceof TFile) {
 			// Check if the file matches current search criteria
 			const query = this.searchQuery.toLowerCase();
 			const matchesQuery = !this.searchQuery.trim() || 
@@ -1302,12 +1960,18 @@ export default class SelectorModal extends Modal {
 						if (!lastQuizDate || new Date(item.stat.mtime) < lastQuizDate) {
 							matchesDate = false;
 						}
+					} else if (this.filterDate === "custom" && this.customFilterDate) {
+						if (new Date(item.stat.mtime) < this.customFilterDate) {
+							matchesDate = false;
+						}
 					} else {
 						const days = parseFloat(this.filterDate);
-						const msAgo = days * 24 * 60 * 60 * 1000;
-						const daysAgo = new Date(Date.now() - msAgo);
-						if (new Date(item.stat.mtime) < daysAgo) {
-							matchesDate = false;
+						if (!isNaN(days)) {
+							const msAgo = days * 24 * 60 * 60 * 1000;
+							const daysAgo = new Date(Date.now() - msAgo);
+							if (new Date(item.stat.mtime) < daysAgo) {
+								matchesDate = false;
+							}
 						}
 					}
 				}
@@ -1354,25 +2018,28 @@ export default class SelectorModal extends Modal {
 		}
 	}
 
+	private calculateTotalTokens(): number {
+		// Calculate tokens from selected notes
+		let totalTokens = [...this.selectedNotes.values()].reduce((sum, content) => {
+			return sum + countNoteTokens(content);
+		}, 0);
+		
+		// Add tokens from backlinks if enabled
+		if (this.includeBacklinks && this.backlinkContent.size > 0) {
+			const backlinkTokens = [...this.backlinkContent.values()].reduce((sum, content) => {
+				return sum + countNoteTokens(content);
+			}, 0);
+			totalTokens += backlinkTokens;
+		}
+		
+		return totalTokens;
+	}
+
 	private updatePromptTokens(tokens: number): void {
 		this.promptTokens = tokens;
-		const noteCount = this.selectedNoteFiles.size;
 		
-		// Clear and rebuild the container with clickable note count
+		// Clear and rebuild the container
 		this.tokenContainer.empty();
-		
-		// Clickable note count
-		const noteCountEl = this.tokenContainer.createEl("span", {
-			cls: "note-count-clickable-qg",
-			text: `${noteCount} note${noteCount !== 1 ? 's' : ''} selected`
-		});
-		noteCountEl.setAttribute("title", "Click to scroll to selected notes");
-		noteCountEl.addEventListener("click", () => {
-			this.scrollToSelectedNotes();
-		});
-		
-		// Separator and token/loading display
-		this.tokenContainer.createEl("span", { text: " • ", cls: "token-separator-qg" });
 		
 		if (this.isCalculatingTokens) {
 			// Show loading indicator with progress
@@ -1527,6 +2194,45 @@ export default class SelectorModal extends Modal {
 			modeSelect.value = ContentSelectionMode.FULL_PAGE;
 		}
 		
+		// Add backlinks checkbox within the content selection group
+		const backlinksRow = this.contentSelectionContainer.createDiv("backlink-row-qg");
+		const backlinksCheckbox = backlinksRow.createEl("input", { type: "checkbox", cls: "backlink-checkbox-qg" });
+		backlinksCheckbox.checked = this.includeBacklinks;
+		backlinksCheckbox.addEventListener("change", async () => {
+			this.includeBacklinks = backlinksCheckbox.checked;
+			this.updateClearButtonVisibility();
+			this.updateSaveButtonState();
+			
+			// Re-render all selected notes with their backlinks if enabled
+			if (this.includeBacklinks) {
+				// Clear existing backlink containers
+				this.selectedFilesContainer?.querySelectorAll(".backlinks-container-qg").forEach(el => el.remove());
+				
+				// Re-render all selected notes with backlinks
+				for (const [filePath, files] of this.selectedNoteFiles.entries()) {
+					for (const file of files) {
+						if (file instanceof TFile) {
+							await this.renderBacklinksForNote(file);
+						}
+					}
+				}
+				
+				// Recalculate and update token count to include backlinks
+				const totalTokens = this.calculateTotalTokens();
+				this.updatePromptTokens(totalTokens);
+			} else {
+				// Remove all backlink containers
+				this.selectedFilesContainer?.querySelectorAll(".backlinks-container-qg").forEach(el => el.remove());
+				this.backlinkMap.clear();
+				this.backlinkContent.clear();
+				
+				// Recalculate and update token count without backlinks
+				const totalTokens = this.calculateTotalTokens();
+				this.updatePromptTokens(totalTokens);
+			}
+		});
+		const backlinksLabel = backlinksRow.createSpan({ text: "Include backlinks", cls: "backlink-label-qg" });
+		
 		modeSelect.addEventListener("change", async (e) => {
 			const newValue = (e.target as HTMLSelectElement).value as ContentSelectionMode;
 			
@@ -1543,6 +2249,15 @@ export default class SelectorModal extends Modal {
 			
 			const oldMode = this.contentSelectionMode;
 			this.contentSelectionMode = newValue;
+			this.updateSaveButtonState();
+			
+			// Clear backlink data when mode changes (will be recalculated)
+			if (oldMode !== newValue) {
+				this.backlinkMap.clear();
+				this.backlinkContent.clear();
+				// Remove existing backlink containers
+				this.selectedFilesContainer?.querySelectorAll(".backlinks-container-qg").forEach(el => el.remove());
+			}
 			
 			// If switching modes and we have selected files, trigger recalculation
 			if (oldMode !== newValue && this.selectedNoteFiles.size > 0) {
@@ -1578,8 +2293,26 @@ export default class SelectorModal extends Modal {
 						totalTokens += tokens;
 					}
 					
-					this.promptTokens = totalTokens;
-					this.updatePromptTokens(totalTokens);
+					// Re-render backlinks if enabled (they may have changed with mode switch)
+					if (this.includeBacklinks) {
+						// Clear existing backlink containers
+						this.selectedFilesContainer?.querySelectorAll(".backlinks-container-qg").forEach(el => el.remove());
+						// Re-collect and render backlinks for all selected notes
+						this.backlinkMap.clear();
+						this.backlinkContent.clear();
+						for (const [filePath, files] of this.selectedNoteFiles.entries()) {
+							for (const file of files) {
+								if (file instanceof TFile) {
+									await this.renderBacklinksForNote(file);
+								}
+							}
+						}
+					}
+					
+					// Calculate total tokens including backlinks
+					const totalTokensWithBacklinks = this.calculateTotalTokens();
+					this.promptTokens = totalTokensWithBacklinks;
+					this.updatePromptTokens(totalTokensWithBacklinks);
 					
 					// Refresh search results to show/hide items based on new token counts
 					await this.performSearch();
@@ -1671,6 +2404,7 @@ export default class SelectorModal extends Modal {
 		toggleEl.addEventListener("change", () => {
 			this.includeBacklinks = toggleEl.checked;
 			this.updateClearButtonVisibility();
+			this.updateSaveButtonState();
 		});
 	}
 
@@ -1685,12 +2419,13 @@ export default class SelectorModal extends Modal {
 		const compactRow = this.autoTagContainer.createDiv("auto-tag-compact-row-qg");
 		
 		// Toggle
-		const toggleLabel = compactRow.createSpan({ text: "Auto-tag", cls: "auto-tag-label-qg" });
+		const toggleLabel = compactRow.createSpan({ text: "Auto-tag notes after quiz generation", cls: "auto-tag-label-qg" });
 		const toggleEl = compactRow.createEl("input", { type: "checkbox", cls: "auto-tag-checkbox-qg" });
 		toggleEl.checked = this.autoTagEnabled;
 		toggleEl.addEventListener("change", () => {
 			this.autoTagEnabled = toggleEl.checked;
 			this.updateClearButtonVisibility();
+			this.updateSaveButtonState();
 			this.renderAutoTagOptions();
 		});
 
@@ -1718,6 +2453,7 @@ export default class SelectorModal extends Modal {
 		tagsInput.value = this.autoTags;
 		tagsInput.addEventListener("input", (e) => {
 			this.autoTags = (e.target as HTMLInputElement).value;
+			this.updateSaveButtonState();
 		});
 		
 		const placementSelect = optionsContainer.createEl("select", { cls: "auto-tag-select-qg" });
@@ -1731,6 +2467,7 @@ export default class SelectorModal extends Modal {
 		});
 		placementSelect.addEventListener("change", (e) => {
 			this.tagPlacement = (e.target as HTMLSelectElement).value as TagPlacement;
+			this.updateSaveButtonState();
 		});
 	}
 
@@ -1772,7 +2509,6 @@ export default class SelectorModal extends Modal {
 				existingBookmark.autoTags = this.autoTags;
 				existingBookmark.tagPlacement = this.tagPlacement;
 				existingBookmark.removeFilteredTags = this.removeFilteredTags;
-				existingBookmark.autoSelectMatching = this.autoSelectMatching;
 				existingBookmark.includeBacklinks = this.includeBacklinks;
 				existingBookmark.contentSelectionMode = this.contentSelectionMode;
 				existingBookmark.updatedAt = Date.now();
@@ -1796,7 +2532,6 @@ export default class SelectorModal extends Modal {
 			autoTags: this.autoTags,
 			tagPlacement: this.tagPlacement,
 			removeFilteredTags: this.removeFilteredTags,
-			autoSelectMatching: this.autoSelectMatching,
 			includeBacklinks: this.includeBacklinks,
 			contentSelectionMode: this.contentSelectionMode,
 			createdAt: Date.now(),
@@ -1840,9 +2575,6 @@ export default class SelectorModal extends Modal {
 		// Load remove tag settings
 		this.removeFilteredTags = bmData.removeFilteredTags || false;
 		
-		// Load auto-select settings
-		this.autoSelectMatching = bmData.autoSelectMatching || false;
-		
 		// Load backlink and content selection settings
 		this.includeBacklinks = bmData.includeBacklinks || false;
 		this.contentSelectionMode = bmData.contentSelectionMode || ContentSelectionMode.FULL_PAGE;
@@ -1850,7 +2582,6 @@ export default class SelectorModal extends Modal {
 		// Update the UI to reflect loaded values
 		this.renderSearchBar();
 		this.renderContentSelectionUI();
-		this.renderBacklinksUI();
 		this.renderAutoTagUI();
 		
 		// If there are advanced filters, show them
@@ -1858,6 +2589,9 @@ export default class SelectorModal extends Modal {
 			this.showAdvanced = true;
 			this.toggleAdvancedFilters();
 		}
+		
+		// Update save button state after loading bookmark
+		this.updateSaveButtonState();
 
 		// Perform the search
 		this.performSearch();
@@ -1905,11 +2639,14 @@ export default class SelectorModal extends Modal {
 	}
 	
 	private async calculateAllTokens(): Promise<void> {
-		console.log('[calculateAllTokens] Starting calculation', {
-			mode: this.contentSelectionMode,
-			filterDate: this.filterDate,
-			totalFiles: this.selectedNoteFiles.size
-		});
+		this.setLoadingCursor();
+		
+		try {
+			console.log('[calculateAllTokens] Starting calculation', {
+				mode: this.contentSelectionMode,
+				filterDate: this.filterDate,
+				totalFiles: this.selectedNoteFiles.size
+			});
 		
 		this.isCalculatingTokens = true;
 		this.tokenCalculationProgress = 0;
@@ -1957,22 +2694,44 @@ export default class SelectorModal extends Modal {
 			for (const content of this.selectedNotes.values()) {
 				totalTokens += countNoteTokens(content);
 			}
-			this.promptTokens = totalTokens;
-			this.updatePromptTokens(totalTokens);
+			// Re-render backlinks if enabled (they may have changed with mode switch)
+			if (this.includeBacklinks) {
+				// Clear existing backlink containers
+				this.selectedFilesContainer?.querySelectorAll(".backlinks-container-qg").forEach(el => el.remove());
+				// Re-collect and render backlinks for all selected notes
+				this.backlinkMap.clear();
+				this.backlinkContent.clear();
+				for (const [filePath, files] of this.selectedNoteFiles.entries()) {
+					for (const file of files) {
+						if (file instanceof TFile) {
+							await this.renderBacklinksForNote(file);
+						}
+					}
+				}
+			}
+			
+			// Calculate total tokens including backlinks
+			const totalTokensWithBacklinks = this.calculateTotalTokens();
+			this.promptTokens = totalTokensWithBacklinks;
+			this.updatePromptTokens(totalTokensWithBacklinks);
 		}
 		
 		if (this.tokenCalculationCancelled) {
 			this.needsRecalculation = true;
 			this.isCalculatingTokens = false;
-			this.updatePromptTokens(this.promptTokens);
+			// Recalculate with backlinks if enabled
+			const totalTokensWithBacklinks = this.calculateTotalTokens();
+			this.updatePromptTokens(totalTokensWithBacklinks);
 		} else {
 			this.isCalculatingTokens = false;
 			this.needsRecalculation = false;
 			console.log(`[calculateAllTokens] Completed: ${this.promptTokens} tokens`);
-			this.updatePromptTokens(this.promptTokens);
-			
-			// Refresh search results to show/hide items based on new token counts
-			await this.performSearch();
+		}
+		
+		// Refresh search results to show/hide items based on new token counts
+		await this.performSearch();
+		} finally {
+			this.unsetLoadingCursor();
 		}
 	}
 	
@@ -2272,6 +3031,10 @@ export default class SelectorModal extends Modal {
 			return this.getLastQuizGenerationDate();
 		}
 		
+		if (this.filterDate === "custom" && this.customFilterDate) {
+			return this.customFilterDate;
+		}
+		
 		// Parse days from filterDate (supports fractional days for hours)
 		const days = parseFloat(this.filterDate);
 		if (isNaN(days)) return null;
@@ -2280,6 +3043,47 @@ export default class SelectorModal extends Modal {
 		const msAgo = days * 24 * 60 * 60 * 1000;
 		const threshold = new Date(Date.now() - msAgo);
 		return threshold;
+	}
+	
+	private formatDateForInput(date: Date): string {
+		const year = date.getFullYear();
+		const month = String(date.getMonth() + 1).padStart(2, '0');
+		const day = String(date.getDate()).padStart(2, '0');
+		return `${year}-${month}-${day}`;
+	}
+	
+	private formatTimeForInput(date: Date): string {
+		const hours = String(date.getHours()).padStart(2, '0');
+		const minutes = String(date.getMinutes()).padStart(2, '0');
+		return `${hours}:${minutes}`;
+	}
+	
+	private updateSaveButtonState(): void {
+		if (!this.saveSearchBtn) return;
+		
+		// Check if any settings differ from defaults
+		const hasNonDefaultSettings = 
+			this.searchQuery.trim() !== "" ||
+			this.filterTag.trim() !== "" ||
+			this.filterFolder.trim() !== "" ||
+			this.filterDate !== "any" ||
+			this.customFilterDate !== null ||
+			this.removeFilteredTags !== false ||
+			this.autoTagEnabled !== false ||
+			this.autoTags.trim() !== "" ||
+			this.tagPlacement !== TagPlacement.FRONTMATTER ||
+			this.includeBacklinks !== false ||
+			this.contentSelectionMode !== ContentSelectionMode.FULL_PAGE;
+		
+		// Enable button if there are non-default settings, disable otherwise
+		this.saveSearchBtn.disabled = !hasNonDefaultSettings;
+		
+		// Update tooltip
+		if (hasNonDefaultSettings) {
+			this.saveSearchBtn.setAttribute("aria-label", "Save current search");
+		} else {
+			this.saveSearchBtn.setAttribute("aria-label", "No search criteria configured to save");
+		}
 	}
 
 	private async applyAutoTags(): Promise<void> {

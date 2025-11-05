@@ -155,21 +155,58 @@ const displayGenerationSettings = (containerEl: HTMLElement, plugin: QuizGenerat
 		const allTypes = getAllQuestionTypes();
 		const currentTotalValue = allTypes.reduce((sum, item) => sum + item.current, 0);
 		
-		// If all types are at 0, distribute to all types proportionally based on stored ratios
-		// This mimics Sonos group volume behavior where all speakers adjust together
+		// If all types are at 0, distribute sequentially (round-robin)
+		// Each type gets incremented to 1 before moving to the next
 		if (currentTotalValue === 0) {
-			// When starting from 0, always distribute equally to ensure all types get at least some value
-			// This provides better UX - when you increment from 0, all types should increase together
-			const equalDistribution = Math.floor(newTotal / 7);
-			const remainder = newTotal % 7;
+			// Initialize all to 0
+			plugin.settings.numberOfTrueFalse = 0;
+			plugin.settings.numberOfMultipleChoice = 0;
+			plugin.settings.numberOfSelectAllThatApply = 0;
+			plugin.settings.numberOfFillInTheBlank = 0;
+			plugin.settings.numberOfMatching = 0;
+			plugin.settings.numberOfShortAnswer = 0;
+			plugin.settings.numberOfLongAnswer = 0;
 			
-			plugin.settings.numberOfTrueFalse = equalDistribution + (remainder > 0 ? 1 : 0);
-			plugin.settings.numberOfMultipleChoice = equalDistribution + (remainder > 1 ? 1 : 0);
-			plugin.settings.numberOfSelectAllThatApply = equalDistribution + (remainder > 2 ? 1 : 0);
-			plugin.settings.numberOfFillInTheBlank = equalDistribution + (remainder > 3 ? 1 : 0);
-			plugin.settings.numberOfMatching = equalDistribution + (remainder > 4 ? 1 : 0);
-			plugin.settings.numberOfShortAnswer = equalDistribution + (remainder > 5 ? 1 : 0);
-			plugin.settings.numberOfLongAnswer = equalDistribution;
+			// Sequential distribution: increment each type one by one
+			const typeOrder = [
+				"trueFalse",
+				"multipleChoice",
+				"selectAllThatApply",
+				"fillInTheBlank",
+				"matching",
+				"shortAnswer",
+				"longAnswer"
+			];
+			
+			// Distribute sequentially: each type gets 1 before moving to next
+			for (let i = 0; i < newTotal; i++) {
+				const typeIndex = i % typeOrder.length;
+				const type = typeOrder[typeIndex];
+				
+				switch (type) {
+					case "trueFalse":
+						plugin.settings.numberOfTrueFalse++;
+						break;
+					case "multipleChoice":
+						plugin.settings.numberOfMultipleChoice++;
+						break;
+					case "selectAllThatApply":
+						plugin.settings.numberOfSelectAllThatApply++;
+						break;
+					case "fillInTheBlank":
+						plugin.settings.numberOfFillInTheBlank++;
+						break;
+					case "matching":
+						plugin.settings.numberOfMatching++;
+						break;
+					case "shortAnswer":
+						plugin.settings.numberOfShortAnswer++;
+						break;
+					case "longAnswer":
+						plugin.settings.numberOfLongAnswer++;
+						break;
+				}
+			}
 			
 			// Enable all types that have count > 0
 			plugin.settings.generateTrueFalse = plugin.settings.numberOfTrueFalse > 0;
@@ -179,121 +216,82 @@ const displayGenerationSettings = (containerEl: HTMLElement, plugin: QuizGenerat
 			plugin.settings.generateMatching = plugin.settings.numberOfMatching > 0;
 			plugin.settings.generateShortAnswer = plugin.settings.numberOfShortAnswer > 0;
 			plugin.settings.generateLongAnswer = plugin.settings.numberOfLongAnswer > 0;
-			
-			// Update ratios for future adjustments
-			updateRatiosFromCurrent();
 		} else {
-			// Some types have values, use proportional adjustment based on current values
-			const enabledTypes = getEnabledTypes();
-			// Use current values to calculate proportions (more accurate than stored ratios)
-			const currentTotalValue = enabledTypes.reduce((sum, item) => sum + item.current, 0);
+			// Speaker group slider logic: apply proportional multiplier to all values
+			// Calculate multiplier (like a master volume control)
+			const multiplier = currentTotalValue > 0 ? newTotal / currentTotalValue : 1;
 			
-			if (currentTotalValue > 0) {
-				let remaining = newTotal;
+			// Store new values with fractional parts for proper rounding
+			const newValues: Array<{ type: string; value: number; fractional: number }> = [];
+			let totalRounded = 0;
+			
+			// Apply multiplier to each type and round down
+			allTypes.forEach(item => {
+				const scaledValue = item.current * multiplier;
+				const roundedValue = Math.max(0, Math.floor(scaledValue));
+				const fractional = scaledValue - roundedValue;
 				
-				// Calculate proportional values based on current counts
-				enabledTypes.forEach((item, index) => {
-					const proportion = item.current / currentTotalValue;
-					const proportionalValue = newTotal * proportion;
-					const roundedValue = Math.floor(proportionalValue);
-					
-					switch (item.type) {
-						case "trueFalse":
-							plugin.settings.numberOfTrueFalse = roundedValue;
-							plugin.settings.generateTrueFalse = roundedValue > 0;
-							break;
-						case "multipleChoice":
-							plugin.settings.numberOfMultipleChoice = roundedValue;
-							plugin.settings.generateMultipleChoice = roundedValue > 0;
-							break;
-						case "selectAllThatApply":
-							plugin.settings.numberOfSelectAllThatApply = roundedValue;
-							plugin.settings.generateSelectAllThatApply = roundedValue > 0;
-							break;
-						case "fillInTheBlank":
-							plugin.settings.numberOfFillInTheBlank = roundedValue;
-							plugin.settings.generateFillInTheBlank = roundedValue > 0;
-							break;
-						case "matching":
-							plugin.settings.numberOfMatching = roundedValue;
-							plugin.settings.generateMatching = roundedValue > 0;
-							break;
-						case "shortAnswer":
-							plugin.settings.numberOfShortAnswer = roundedValue;
-							plugin.settings.generateShortAnswer = roundedValue > 0;
-							break;
-						case "longAnswer":
-							plugin.settings.numberOfLongAnswer = roundedValue;
-							plugin.settings.generateLongAnswer = roundedValue > 0;
-							break;
-					}
-					remaining -= roundedValue;
+				newValues.push({
+					type: item.type,
+					value: roundedValue,
+					fractional: fractional
 				});
 				
-				// Distribute remainder to maintain total
-				if (remaining !== 0) {
-					// Sort by current value (descending) to distribute remainder fairly
-					const sorted = [...enabledTypes].sort((a, b) => {
-						const aVal = a.current;
-						const bVal = b.current;
-						return bVal - aVal;
-					});
-					
-					// Distribute remainder one by one
-					for (let i = 0; i < Math.abs(remaining); i++) {
-						const targetIndex = i % sorted.length;
-						const targetType = sorted[targetIndex].type;
-						const increment = remaining > 0 ? 1 : -1;
-						
-						switch (targetType) {
-							case "trueFalse": 
-								plugin.settings.numberOfTrueFalse += increment;
-								if (plugin.settings.numberOfTrueFalse < 0) plugin.settings.numberOfTrueFalse = 0;
-								break;
-							case "multipleChoice": 
-								plugin.settings.numberOfMultipleChoice += increment;
-								if (plugin.settings.numberOfMultipleChoice < 0) plugin.settings.numberOfMultipleChoice = 0;
-								break;
-							case "selectAllThatApply": 
-								plugin.settings.numberOfSelectAllThatApply += increment;
-								if (plugin.settings.numberOfSelectAllThatApply < 0) plugin.settings.numberOfSelectAllThatApply = 0;
-								break;
-							case "fillInTheBlank": 
-								plugin.settings.numberOfFillInTheBlank += increment;
-								if (plugin.settings.numberOfFillInTheBlank < 0) plugin.settings.numberOfFillInTheBlank = 0;
-								break;
-							case "matching": 
-								plugin.settings.numberOfMatching += increment;
-								if (plugin.settings.numberOfMatching < 0) plugin.settings.numberOfMatching = 0;
-								break;
-							case "shortAnswer": 
-								plugin.settings.numberOfShortAnswer += increment;
-								if (plugin.settings.numberOfShortAnswer < 0) plugin.settings.numberOfShortAnswer = 0;
-								break;
-							case "longAnswer": 
-								plugin.settings.numberOfLongAnswer += increment;
-								if (plugin.settings.numberOfLongAnswer < 0) plugin.settings.numberOfLongAnswer = 0;
-								break;
-						}
-					}
-					
-					// Update generate flags
-					enabledTypes.forEach(item => {
-						switch (item.type) {
-							case "trueFalse": plugin.settings.generateTrueFalse = plugin.settings.numberOfTrueFalse > 0; break;
-							case "multipleChoice": plugin.settings.generateMultipleChoice = plugin.settings.numberOfMultipleChoice > 0; break;
-							case "selectAllThatApply": plugin.settings.generateSelectAllThatApply = plugin.settings.numberOfSelectAllThatApply > 0; break;
-							case "fillInTheBlank": plugin.settings.generateFillInTheBlank = plugin.settings.numberOfFillInTheBlank > 0; break;
-							case "matching": plugin.settings.generateMatching = plugin.settings.numberOfMatching > 0; break;
-							case "shortAnswer": plugin.settings.generateShortAnswer = plugin.settings.numberOfShortAnswer > 0; break;
-							case "longAnswer": plugin.settings.generateLongAnswer = plugin.settings.numberOfLongAnswer > 0; break;
-						}
-					});
-				}
+				totalRounded += roundedValue;
+			});
+			
+			// Distribute remainder to ensure exact total
+			let remainder = newTotal - totalRounded;
+			
+			if (remainder !== 0) {
+				// Sort by fractional part (descending) to distribute remainder fairly
+				// This prioritizes types that were closest to rounding up
+				newValues.sort((a, b) => b.fractional - a.fractional);
 				
-				// Update ratios for future adjustments
-				updateRatiosFromCurrent();
+				// Distribute remainder
+				for (let i = 0; i < Math.abs(remainder); i++) {
+					const targetIndex = i % newValues.length;
+					if (remainder > 0) {
+						newValues[targetIndex].value++;
+					} else {
+						newValues[targetIndex].value = Math.max(0, newValues[targetIndex].value - 1);
+					}
+				}
 			}
+			
+			// Apply new values
+			newValues.forEach(item => {
+				switch (item.type) {
+					case "trueFalse":
+						plugin.settings.numberOfTrueFalse = item.value;
+						plugin.settings.generateTrueFalse = item.value > 0;
+						break;
+					case "multipleChoice":
+						plugin.settings.numberOfMultipleChoice = item.value;
+						plugin.settings.generateMultipleChoice = item.value > 0;
+						break;
+					case "selectAllThatApply":
+						plugin.settings.numberOfSelectAllThatApply = item.value;
+						plugin.settings.generateSelectAllThatApply = item.value > 0;
+						break;
+					case "fillInTheBlank":
+						plugin.settings.numberOfFillInTheBlank = item.value;
+						plugin.settings.generateFillInTheBlank = item.value > 0;
+						break;
+					case "matching":
+						plugin.settings.numberOfMatching = item.value;
+						plugin.settings.generateMatching = item.value > 0;
+						break;
+					case "shortAnswer":
+						plugin.settings.numberOfShortAnswer = item.value;
+						plugin.settings.generateShortAnswer = item.value > 0;
+						break;
+					case "longAnswer":
+						plugin.settings.numberOfLongAnswer = item.value;
+						plugin.settings.generateLongAnswer = item.value > 0;
+						break;
+				}
+			});
 		}
 		
 		await plugin.saveSettings();
@@ -350,12 +348,12 @@ const displayGenerationSettings = (containerEl: HTMLElement, plugin: QuizGenerat
 		const surpriseMeSetting = new Setting(generationSection)
 			.setName("Surprise me")
 			.setDesc("Randomize question type distribution. Individual question type counters will be hidden and order controls disabled when enabled.")
-			.addToggle(toggle =>
-				toggle
+		.addToggle(toggle =>
+			toggle
 					.setValue(plugin.settings.surpriseMe)
-					.onChange(async (value) => {
+				.onChange(async (value) => {
 						plugin.settings.surpriseMe = value;
-						await plugin.saveSettings();
+					await plugin.saveSettings();
 						refreshQuestionTypeSettings?.();
 						refreshQuestionTypeOrderUI?.();
 						updateTotalCount();
@@ -365,6 +363,7 @@ const displayGenerationSettings = (containerEl: HTMLElement, plugin: QuizGenerat
 	
 	// Question type settings container (will be hidden when surprise me is enabled)
 	const questionTypesContainer = generationSection.createDiv("question-types-container-qg");
+	questionTypesContainer.style.gridColumn = "1 / -1"; // Span both columns
 	
 	let refreshQuestionTypeSettings: (() => void) | null = null;
 
@@ -762,7 +761,7 @@ const displayGenerationSettings = (containerEl: HTMLElement, plugin: QuizGenerat
 							currentOrder.splice(targetIndex, 0, draggedType);
 							
 							plugin.settings.questionTypeOrder = currentOrder;
-							await plugin.saveSettings();
+					await plugin.saveSettings();
 							refreshQuestionTypeOrderUI?.();
 						}
 					});

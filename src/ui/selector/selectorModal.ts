@@ -454,14 +454,7 @@ export default class SelectorModal extends Modal {
 			return;
 		}
 
-		// If auto-select is enabled, clear current selections when criteria changes
-		if (this.autoSelectMatching) {
-			this.selectedNotes.clear();
-			this.selectedNoteFiles.clear();
-			this.selectedFilesContainer?.empty();
-			this.updatePromptTokens(0);
-		}
-
+		// Step 1: Filter files by basic criteria (text, tag, folder, date)
 		const allFiles = this.app.vault.getMarkdownFiles();
 		const query = this.searchQuery.toLowerCase();
 		
@@ -529,19 +522,70 @@ export default class SelectorModal extends Modal {
 			return true;
 		});
 
-		// Auto-select all matching files if enabled
-		if (this.autoSelectMatching && matchingFiles.length > 0) {
-			console.log('[performSearch] Auto-selecting files', {
-				count: matchingFiles.length,
-				mode: this.contentSelectionMode,
-				filterDate: this.filterDate
-			});
-			
-			// Add all files first without triggering individual recalculations
-			for (const file of matchingFiles) {
-				await this.addFileToSelection(file, true); // skipCalculation = true
+		// Step 2: TOKENIZE FIRST - Calculate tokens for each matching file BEFORE showing results
+		// This ensures we only show files with relevant content and prevents loops
+		const filesWithTokenData = await Promise.all(
+			matchingFiles.map(async (file) => {
+				let tokens = 0;
+				let content = "";
 				
-				// Track filtered tags for removal if enabled (supports multiple tags)
+				// Calculate tokens based on current mode
+				if (this.contentSelectionMode === ContentSelectionMode.CHANGES_ONLY && this.filterDate !== "any") {
+					// In changes mode, extract content changes and count tokens
+					try {
+						const noteContents = await this.app.vault.cachedRead(file);
+						content = await this.extractContentChanges(file, noteContents);
+						tokens = countNoteTokens(content);
+					} catch (error) {
+						tokens = 0;
+						content = "";
+					}
+				} else {
+					// Full page mode - read file and count tokens
+					try {
+						const noteContents = await this.app.vault.cachedRead(file);
+						content = cleanUpNoteContents(noteContents, getFrontMatterInfo(noteContents).exists);
+						tokens = countNoteTokens(content);
+					} catch (error) {
+						tokens = 0;
+						content = "";
+					}
+				}
+				
+				return { file, tokens, content };
+			})
+		);
+		
+		// Step 3: Filter out files with 0 tokens - these don't have relevant content
+		// ONLY files with tokens > 0 are eligible for selection
+		const filesWithNonZeroTokens = filesWithTokenData
+			.filter(({ tokens }) => tokens > 0);
+
+		// Step 4: Handle auto-select if enabled (ONLY select files that have tokens)
+		if (this.autoSelectMatching && filesWithNonZeroTokens.length > 0) {
+			// Clear previous selections when auto-select is enabled
+			this.selectedNotes.clear();
+			this.selectedNoteFiles.clear();
+			this.selectedFilesContainer?.empty();
+			this.noteTokenElements.clear();
+			this.noteItemContainers.clear();
+			this.preparedContent.clear();
+			this.updatePromptTokens(0);
+			
+			// Add all files with tokens to selection, using pre-calculated content
+			for (const { file, content, tokens } of filesWithNonZeroTokens) {
+				// Skip if already selected (shouldn't happen, but safety check)
+				if (this.selectedNoteFiles.has(file.path)) continue;
+				
+				this.notePaths = this.notePaths.filter(notePath => notePath !== file.path);
+				this.selectedNoteFiles.set(file.path, [file]);
+				this.selectedNotes.set(file.path, content);
+				this.preparedContent.set(file.path, content);
+				
+				// Render the note immediately with known token count
+				this.renderNote(file);
+				
+				// Track filtered tags for removal if enabled
 				if (this.filterTag && this.removeFilteredTags) {
 					const tags = this.filterTag
 						.split(',')
@@ -552,88 +596,29 @@ export default class SelectorModal extends Modal {
 				}
 			}
 			
-			// Trigger calculation if in changes mode
-			console.log('[performSearch] Checking if should calculate', {
-				mode: this.contentSelectionMode,
-				filterDate: this.filterDate,
-				shouldCalculate: this.contentSelectionMode === ContentSelectionMode.CHANGES_ONLY && this.filterDate !== "any"
-			});
+			// Update total token count
+			const totalTokens = filesWithNonZeroTokens.reduce((sum, { tokens }) => sum + tokens, 0);
+			this.promptTokens = totalTokens;
+			this.updatePromptTokens(totalTokens);
 			
-			if (this.contentSelectionMode === ContentSelectionMode.CHANGES_ONLY && this.filterDate !== "any") {
-				console.log('[performSearch] Triggering calculateAllTokens');
-				await this.calculateAllTokens();
-			} else {
-				console.log('[performSearch] Calculating tokens for full page mode');
-				// Update token count for auto-selected files
-				const totalTokens = [...this.selectedNotes.values()].reduce((sum, content) => {
-					return sum + countNoteTokens(content);
-				}, 0);
-				console.log('[performSearch] Total tokens:', totalTokens);
-				this.updatePromptTokens(totalTokens);
-			}
-		}
-
-		// Filter out files with 0 tokens from search results
-		const filesWithTokens = await Promise.all(
-			matchingFiles.map(async (file) => {
-				// Check if file has tokens
-				let tokens = 0;
-				
-				// If file is already selected, check preparedContent or selectedNotes
-				if (this.selectedNoteFiles.has(file.path)) {
-					const content = this.selectedNotes.get(file.path);
-					if (content !== undefined) {
-						tokens = countNoteTokens(content);
-					}
-				} else {
-					// For unselected files, check if they would have tokens in current mode
-					if (this.contentSelectionMode === ContentSelectionMode.CHANGES_ONLY && this.filterDate !== "any") {
-						// In changes mode, calculate tokens by extracting content changes
-						// This ensures we hide files with 0 tokens even if they haven't been selected yet
-						try {
-							const noteContents = await this.app.vault.cachedRead(file);
-							const contentChanges = await this.extractContentChanges(file, noteContents);
-							tokens = countNoteTokens(contentChanges);
-						} catch (error) {
-							// If extraction fails, assume 0 tokens
-							tokens = 0;
-						}
-					} else {
-						// Full page mode - read file and check tokens
-						try {
-							const noteContents = await this.app.vault.cachedRead(file);
-							const contentToStore = cleanUpNoteContents(noteContents, getFrontMatterInfo(noteContents).exists);
-							tokens = countNoteTokens(contentToStore);
-						} catch (error) {
-							tokens = 0;
-						}
-					}
-				}
-				
-				return { file, tokens };
-			})
-		);
-		
-		// Filter out files with 0 tokens
-		const filesWithNonZeroTokens = filesWithTokens
-			.filter(({ tokens }) => tokens > 0)
-			.map(({ file }) => file);
-		
-		// Display search results (limit to first 20 for UI)
-		const displayFiles = this.autoSelectMatching ? [] : filesWithNonZeroTokens.slice(0, 20);
-		
-		this.searchResultsContainer!.empty();
-		
-		if (this.autoSelectMatching && filesWithNonZeroTokens.length > 0) {
-			// Show message when auto-selecting
+			// Show message
+			this.searchResultsContainer!.empty();
 			this.searchResultsContainer!.style.display = "block";
 			const header = this.searchResultsContainer!.createDiv("search-results-header-qg");
 			header.textContent = `Auto-selected ${filesWithNonZeroTokens.length} note${filesWithNonZeroTokens.length !== 1 ? 's' : ''} matching criteria`;
-		} else if (!this.autoSelectMatching && displayFiles.length > 0) {
-			// Show search results
+			return;
+		}
+		
+		// Step 5: Display search results (ONLY files with tokens, limit to first 20)
+		// These files are already tokenized and guaranteed to have tokens > 0
+		const displayFiles = filesWithNonZeroTokens.slice(0, 20);
+		
+		this.searchResultsContainer!.empty();
+		
+		if (displayFiles.length > 0) {
 			this.searchResultsContainer!.style.display = "block";
 			
-			displayFiles.forEach(file => {
+			displayFiles.forEach(({ file, content, tokens }) => {
 				const resultItem = this.searchResultsContainer!.createDiv("search-result-item-qg");
 				
 				const fileName = resultItem.createDiv("search-result-name-qg");
@@ -642,37 +627,43 @@ export default class SelectorModal extends Modal {
 				const filePath = resultItem.createDiv("search-result-path-qg");
 				filePath.setText(file.parent?.path || "/");
 				
-			resultItem.addEventListener("click", async () => {
-				await this.addFileToSelection(file);
-				
-				// Track filtered tags for removal if enabled (supports multiple tags)
-				if (this.filterTag && this.removeFilteredTags) {
-					const tags = this.filterTag
-						.split(',')
-						.map(tag => tag.trim())
-						.filter(tag => tag.length > 0)
-						.map(tag => tag.startsWith("#") ? tag : `#${tag}`);
-					tags.forEach(tag => this.filteredTagsToRemove.add(tag));
-				}
-				
-				// Trigger calculation if in changes mode
-				if (this.contentSelectionMode === ContentSelectionMode.CHANGES_ONLY && this.filterDate !== "any") {
-					if (!this.isCalculatingTokens) {
-						await this.calculateAllTokens();
+				resultItem.addEventListener("click", async () => {
+					// Add file to selection using pre-calculated content
+					// This avoids re-calculating tokens and prevents loops
+					if (this.selectedNoteFiles.has(file.path)) {
+						return; // Already selected
 					}
-				} else {
-					// Update token count for full page mode
-					const totalTokens = [...this.selectedNotes.values()].reduce((sum, content) => {
-						return sum + countNoteTokens(content);
+					
+					this.notePaths = this.notePaths.filter(notePath => notePath !== file.path);
+					this.selectedNoteFiles.set(file.path, [file]);
+					this.selectedNotes.set(file.path, content);
+					this.preparedContent.set(file.path, content);
+					
+					// Render the note
+					this.renderNote(file);
+					
+					// Track filtered tags for removal if enabled
+					if (this.filterTag && this.removeFilteredTags) {
+						const tags = this.filterTag
+							.split(',')
+							.map(tag => tag.trim())
+							.filter(tag => tag.length > 0)
+							.map(tag => tag.startsWith("#") ? tag : `#${tag}`);
+						tags.forEach(tag => this.filteredTagsToRemove.add(tag));
+					}
+					
+					// Update total token count
+					const totalTokens = [...this.selectedNotes.values()].reduce((sum, c) => {
+						return sum + countNoteTokens(c);
 					}, 0);
 					this.updatePromptTokens(totalTokens);
-				}
-				
-				await this.performSearch(); // Refresh search results
+					
+					// Refresh search results to remove the clicked file
+					await this.performSearch();
+				});
 			});
-			});
-		} else if (!this.autoSelectMatching && filesWithNonZeroTokens.length > 0 && displayFiles.length === 0) {
-			// Show message if there are files with tokens but they're beyond the display limit
+		} else if (filesWithNonZeroTokens.length > displayFiles.length) {
+			// Show message if there are more files beyond the display limit
 			this.searchResultsContainer!.style.display = "block";
 			const message = this.searchResultsContainer!.createDiv("search-results-header-qg");
 			message.textContent = `${filesWithNonZeroTokens.length} note${filesWithNonZeroTokens.length !== 1 ? 's' : ''} with content found (showing first 20)`;

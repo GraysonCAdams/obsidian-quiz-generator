@@ -1430,9 +1430,13 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 							icon="message-square"
 							tooltip="Conversation Mode - ChatGPT"
 							onClick={() => {
-								// @ts-ignore - Access plugin instance
-								const plugin = app.plugins.plugins["obsidian-quiz-generator"];
-								const modal = new ConversationModeModal(app, activeQuestions, settings, plugin);
+								// Access plugin instance - plugin should be passed as prop
+								const pluginInstance = plugin || (app.plugins.plugins as Record<string, QuizGenerator | undefined>)["obsidian-quiz-generator"];
+								if (!pluginInstance) {
+									new Notice("Plugin instance not available");
+									return;
+								}
+								const modal = new ConversationModeModal(app, activeQuestions, settings, pluginInstance);
 								
 								// Pause timers when modal opens
 								conversationModalPausedAtRef.current = Date.now();

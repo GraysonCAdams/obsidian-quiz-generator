@@ -1,7 +1,7 @@
-import { Notice } from "obsidian";
 import OpenAI from "openai";
 import Generator from "../generator";
 import { QuizSettings } from "../../settings/config";
+import { handleTruncationNotice, handleGenerationError } from "../../utils/errorHandler";
 
 export default class PerplexityGenerator extends Generator {
 	private readonly perplexity: OpenAI;
@@ -25,13 +25,11 @@ export default class PerplexityGenerator extends Generator {
 				],
 			});
 
-			if (response.choices[0].finish_reason === "length") {
-				new Notice("Generation truncated: Token limit reached");
-			}
+			handleTruncationNotice(response.choices[0].finish_reason);
 
 			return response.choices[0].message.content;
 		} catch (error) {
-			throw new Error((error as Error).message);
+			handleGenerationError(error);
 		}
 	}
 

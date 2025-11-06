@@ -4,14 +4,8 @@ import { languages } from "./generalConfig";
 import ElevenLabsService, { ElevenLabsVoice } from "../../services/elevenLabsService";
 import SoundManager from "../../services/soundManager";
 import { ElevenLabsApiKeyInfoModal } from "./elevenLabsApiKeyInfoModal";
-import { Provider, providers } from "../../generators/providers";
-import displayOpenAISettings from "../model/openai/openAISettings";
-import displayGoogleSettings from "../model/google/googleSettings";
-import displayAnthropicSettings from "../model/anthropic/anthropicSettings";
-import displayPerplexitySettings from "../model/perplexity/perplexitySettings";
-import displayMistralSettings from "../model/mistral/mistralSettings";
-import displayCohereSettings from "../model/cohere/cohereSettings";
-import displayOllamaSettings from "../model/ollama/ollamaSettings";
+import { providers } from "../../generators/providers";
+import { displayProviderSettings } from "../model/providerRegistry";
 import displayGenerationSettings from "../generation/generationSettings";
 
 export const displayGeneralSettings = (containerEl: HTMLElement, plugin: QuizGenerator, refreshSettings?: () => void, showAdvanced?: boolean): void => {
@@ -36,21 +30,7 @@ export const displayGeneralSettings = (containerEl: HTMLElement, plugin: QuizGen
 				})
 		);
 
-	if (plugin.settings.provider === Provider.OPENAI) {
-		displayOpenAISettings(containerEl, plugin, refreshSettings || (() => {}), advanced);
-	} else if (plugin.settings.provider === Provider.GOOGLE) {
-		displayGoogleSettings(containerEl, plugin, refreshSettings || (() => {}), advanced);
-	} else if (plugin.settings.provider === Provider.ANTHROPIC) {
-		displayAnthropicSettings(containerEl, plugin, refreshSettings || (() => {}), advanced);
-	} else if (plugin.settings.provider === Provider.PERPLEXITY) {
-		displayPerplexitySettings(containerEl, plugin, refreshSettings || (() => {}), advanced);
-	} else if (plugin.settings.provider === Provider.MISTRAL) {
-		displayMistralSettings(containerEl, plugin, refreshSettings || (() => {}), advanced);
-	} else if (plugin.settings.provider === Provider.COHERE) {
-		displayCohereSettings(containerEl, plugin, refreshSettings || (() => {}), advanced);
-	} else if (plugin.settings.provider === Provider.OLLAMA) {
-		displayOllamaSettings(containerEl, plugin, refreshSettings || (() => {}), advanced);
-	}
+	displayProviderSettings(containerEl, plugin, refreshSettings || (() => {}), showAdvanced);
 
 	// Quiz Behavior
 	new Setting(containerEl).setName("Quiz Behavior").setHeading();

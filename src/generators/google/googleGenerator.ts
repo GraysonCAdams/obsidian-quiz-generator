@@ -2,6 +2,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import Generator from "../generator";
 import { QuizSettings } from "../../settings/config";
 import { cosineSimilarity } from "../../utils/helpers";
+import { handleGenerationError, handleEmbeddingError } from "../../utils/errorHandler";
 
 export default class GoogleGenerator extends Generator {
 	private readonly google: GoogleGenerativeAI;
@@ -27,7 +28,7 @@ export default class GoogleGenerator extends Generator {
 
 			return response.response.text();
 		} catch (error) {
-			throw new Error((error as Error).message);
+			handleGenerationError(error);
 		}
 	}
 
@@ -50,7 +51,7 @@ export default class GoogleGenerator extends Generator {
 
 			return cosineSimilarity(embedding.embeddings[0].values, embedding.embeddings[1].values);
 		} catch (error) {
-			throw new Error((error as Error).message);
+			handleEmbeddingError(error);
 		}
 	}
 }

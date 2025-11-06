@@ -2,6 +2,7 @@ import { Ollama } from "ollama/dist/browser.mjs";
 import Generator from "../generator";
 import { QuizSettings } from "../../settings/config";
 import { cosineSimilarity } from "../../utils/helpers";
+import { handleGenerationError, handleEmbeddingError } from "../../utils/errorHandler";
 
 export default class OllamaGenerator extends Generator {
 	private readonly ollama: Ollama;
@@ -23,7 +24,7 @@ export default class OllamaGenerator extends Generator {
 
 			return response.response;
 		} catch (error) {
-			throw new Error((error as Error).message);
+			handleGenerationError(error);
 		}
 	}
 
@@ -36,7 +37,7 @@ export default class OllamaGenerator extends Generator {
 
 			return cosineSimilarity(embedding.embeddings[0], embedding.embeddings[1]);
 		} catch (error) {
-			throw new Error((error as Error).message);
+			handleEmbeddingError(error);
 		}
 	}
 }

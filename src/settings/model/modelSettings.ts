@@ -1,13 +1,7 @@
 import { Setting } from "obsidian";
 import QuizGenerator from "../../main";
-import { Provider, providers } from "../../generators/providers";
-import displayOpenAISettings from "./openai/openAISettings";
-import displayGoogleSettings from "./google/googleSettings";
-import displayAnthropicSettings from "./anthropic/anthropicSettings";
-import displayPerplexitySettings from "./perplexity/perplexitySettings";
-import displayMistralSettings from "./mistral/mistralSettings";
-import displayCohereSettings from "./cohere/cohereSettings";
-import displayOllamaSettings from "./ollama/ollamaSettings";
+import { providers } from "../../generators/providers";
+import { displayProviderSettings } from "./providerRegistry";
 
 const displayModelSettings = (containerEl: HTMLElement, plugin: QuizGenerator, refreshSettings: () => void): void => {
 	new Setting(containerEl).setName("Model").setHeading();
@@ -26,21 +20,7 @@ const displayModelSettings = (containerEl: HTMLElement, plugin: QuizGenerator, r
 				})
 		);
 
-	if (plugin.settings.provider === Provider.OPENAI) {
-		displayOpenAISettings(containerEl, plugin, refreshSettings);
-	} else if (plugin.settings.provider === Provider.GOOGLE) {
-		displayGoogleSettings(containerEl, plugin, refreshSettings);
-	} else if (plugin.settings.provider === Provider.ANTHROPIC) {
-		displayAnthropicSettings(containerEl, plugin, refreshSettings);
-	} else if (plugin.settings.provider === Provider.PERPLEXITY) {
-		displayPerplexitySettings(containerEl, plugin, refreshSettings);
-	} else if (plugin.settings.provider === Provider.MISTRAL) {
-		displayMistralSettings(containerEl, plugin, refreshSettings);
-	} else if (plugin.settings.provider === Provider.COHERE) {
-		displayCohereSettings(containerEl, plugin, refreshSettings);
-	} else if (plugin.settings.provider === Provider.OLLAMA) {
-		displayOllamaSettings(containerEl, plugin, refreshSettings);
-	}
+	displayProviderSettings(containerEl, plugin, refreshSettings);
 };
 
 export default displayModelSettings;

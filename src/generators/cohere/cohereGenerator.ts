@@ -1,8 +1,8 @@
-import { Notice } from "obsidian";
 import { CohereClient } from "cohere-ai/Client";
 import Generator from "../generator";
 import { QuizSettings } from "../../settings/config";
 import { cosineSimilarity } from "../../utils/helpers";
+import { handleTruncationNotice, handleGenerationError, handleEmbeddingError } from "../../utils/errorHandler";
 
 export default class CohereGenerator extends Generator {
 	private readonly cohere: CohereClient;
@@ -24,13 +24,11 @@ export default class CohereGenerator extends Generator {
 				responseFormat: { type: "json_object" },
 			});
 
-			if (response.finishReason === "MAX_TOKENS") {
-				new Notice("Generation truncated: Token limit reached");
-			}
+			handleTruncationNotice(response.finishReason === "MAX_TOKENS" ? "max_tokens" : null);
 
 			return response.text;
 		} catch (error) {
-			throw new Error((error as Error).message);
+			handleGenerationError(error);
 		}
 	}
 
@@ -44,7 +42,7 @@ export default class CohereGenerator extends Generator {
 
 			return cosineSimilarity((embedding.embeddings as number[][])[0], (embedding.embeddings as number[][])[1]);
 		} catch (error) {
-			throw new Error((error as Error).message);
+			handleEmbeddingError(error);
 		}
 	}
 }

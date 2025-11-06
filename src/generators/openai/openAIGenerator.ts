@@ -1,8 +1,8 @@
-import { Notice } from "obsidian";
 import OpenAI from "openai";
 import Generator from "../generator";
 import { QuizSettings } from "../../settings/config";
 import { cosineSimilarity } from "../../utils/helpers";
+import { handleTruncationNotice, handleGenerationError, handleEmbeddingError } from "../../utils/errorHandler";
 
 export default class OpenAIGenerator extends Generator {
 	private readonly openai: OpenAI;
@@ -27,13 +27,11 @@ export default class OpenAIGenerator extends Generator {
 				response_format: { type: "json_object" },
 			});
 
-			if (response.choices[0].finish_reason === "length") {
-				new Notice("Generation truncated: Token limit reached");
-			}
+			handleTruncationNotice(response.choices[0].finish_reason);
 
 			return response.choices[0].message.content;
 		} catch (error) {
-			throw new Error((error as Error).message);
+			handleGenerationError(error);
 		}
 	}
 
@@ -46,7 +44,7 @@ export default class OpenAIGenerator extends Generator {
 
 			return cosineSimilarity(embedding.data[0].embedding, embedding.data[1].embedding);
 		} catch (error) {
-			throw new Error((error as Error).message);
+			handleEmbeddingError(error);
 		}
 	}
 }

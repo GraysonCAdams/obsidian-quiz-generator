@@ -1,8 +1,8 @@
-import { Notice } from "obsidian";
 import Anthropic from "@anthropic-ai/sdk";
 import Generator from "../generator";
 import { QuizSettings } from "../../settings/config";
 import { AnthropicTextGenModel } from "./anthropicModels";
+import { handleTruncationNotice, handleGenerationError } from "../../utils/errorHandler";
 
 export default class AnthropicGenerator extends Generator {
 	private readonly anthropic: Anthropic;
@@ -27,13 +27,11 @@ export default class AnthropicGenerator extends Generator {
 				max_tokens: this.getMaxTokens(),
 			});
 
-			if (response.stop_reason === "max_tokens") {
-				new Notice("Generation truncated: Token limit reached");
-			}
+			handleTruncationNotice(response.stop_reason);
 
 			return response.content[0].type === "text" ? response.content[0].text : null;
 		} catch (error) {
-			throw new Error((error as Error).message);
+			handleGenerationError(error);
 		}
 	}
 

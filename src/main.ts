@@ -136,8 +136,8 @@ export default class QuizGenerator extends Plugin {
 				if (!currentBookmarkIds.has(bookmarkId)) {
 					// This bookmark no longer exists, remove its command
 					try {
-						// @ts-ignore - accessing internal API
-						this.app.commands.removeCommand(`${this.manifest.id}:${commandId}`);
+						// Accessing internal API for command removal
+						(this.app.commands as { removeCommand?: (id: string) => void }).removeCommand?.(`${this.manifest.id}:${commandId}`);
 					} catch (e) {
 						console.error(`Failed to remove command ${commandId}:`, e);
 					}
@@ -154,8 +154,8 @@ export default class QuizGenerator extends Plugin {
 			
 			// First, try to remove any existing command with this ID (in case it wasn't tracked)
 			try {
-				// @ts-ignore - accessing internal API
-				this.app.commands.removeCommand(`${this.manifest.id}:${commandId}`);
+				// Accessing internal API for command removal
+				(this.app.commands as { removeCommand?: (id: string) => void }).removeCommand?.(`${this.manifest.id}:${commandId}`);
 			} catch (e) {
 				// Command might not exist, which is fine
 			}

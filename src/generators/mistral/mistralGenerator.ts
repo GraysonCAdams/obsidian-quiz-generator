@@ -1,8 +1,9 @@
-import { Notice } from "obsidian";
 import { Mistral } from "@mistralai/mistralai";
 import Generator from "../generator";
 import { QuizSettings } from "../../settings/config";
 import { cosineSimilarity } from "../../utils/helpers";
+import { handleTruncationNotice, handleGenerationError, handleEmbeddingError } from "../../utils/errorHandler";
+import { showError } from "../../utils/notifications";
 
 export default class MistralGenerator extends Generator {
 	private readonly mistral: Mistral;
@@ -30,13 +31,11 @@ export default class MistralGenerator extends Generator {
 				return null;
 			}
 
-			if (response.choices[0].finishReason === "length" || response.choices[0].finishReason === "model_length") {
-				new Notice("Generation truncated: Token limit reached");
-			}
+			handleTruncationNotice(response.choices[0].finishReason);
 
 			return response.choices[0].message.content;
 		} catch (error) {
-			throw new Error((error as Error).message);
+			handleGenerationError(error);
 		}
 	}
 
@@ -48,13 +47,13 @@ export default class MistralGenerator extends Generator {
 			});
 
 			if (!embedding.data[0].embedding || !embedding.data[1].embedding) {
-				new Notice("Error: Incomplete API response");
+				showErrorNotification("Incomplete API response");
 				return 0;
 			}
 
 			return cosineSimilarity(embedding.data[0].embedding, embedding.data[1].embedding);
 		} catch (error) {
-			throw new Error((error as Error).message);
+			handleEmbeddingError(error);
 		}
 	}
 }

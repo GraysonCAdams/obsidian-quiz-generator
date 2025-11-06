@@ -1,61 +1,22 @@
-import { Setting } from "obsidian";
 import QuizGenerator from "../../../main";
 import { perplexityTextGenModels } from "../../../generators/perplexity/perplexityModels";
 import { DEFAULT_PERPLEXITY_SETTINGS } from "./perplexityConfig";
+import { createProviderSettings, ProviderSettingsConfig } from "../providerSettingsFactory";
 
 const displayPerplexitySettings = (containerEl: HTMLElement, plugin: QuizGenerator, refreshSettings: () => void, showAdvanced?: boolean): void => {
-	const advanced = showAdvanced ?? false;
-	
-	// API key is essential - always show
-	new Setting(containerEl)
-		.setName("Perplexity API key")
-		.setDesc("Enter your Perplexity API key here.")
-		.addText(text =>
-			text
-				.setValue(plugin.settings.perplexityApiKey)
-				.onChange(async (value) => {
-					plugin.settings.perplexityApiKey = value.trim();
-					await plugin.saveSettings();
-				}).inputEl.type = "password"
-		);
+	const config: ProviderSettingsConfig = {
+		providerName: "Perplexity",
+		apiKeyField: "perplexityApiKey",
+		apiKeyDescription: "Enter your Perplexity API key here.",
+		baseURLField: "perplexityBaseURL",
+		baseURLDescription: "Enter your Perplexity API base URL here.",
+		defaultBaseURL: DEFAULT_PERPLEXITY_SETTINGS.perplexityBaseURL,
+		textGenModelField: "perplexityTextGenModel",
+		textGenModels: perplexityTextGenModels,
+		hasEmbedding: false,
+	};
 
-	if (advanced) {
-		new Setting(containerEl)
-			.setName("Perplexity API base url")
-			.setDesc("Enter your Perplexity API base URL here.")
-			.addButton(button =>
-				button
-					.setClass("clickable-icon")
-					.setIcon("rotate-ccw")
-					.setTooltip("Restore default")
-					.onClick(async () => {
-						plugin.settings.perplexityBaseURL = DEFAULT_PERPLEXITY_SETTINGS.perplexityBaseURL;
-						await plugin.saveSettings();
-						refreshSettings();
-					})
-			)
-			.addText(text =>
-				text
-					.setValue(plugin.settings.perplexityBaseURL)
-					.onChange(async (value) => {
-						plugin.settings.perplexityBaseURL = value.trim();
-						await plugin.saveSettings();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName("Generation model")
-			.setDesc("Model used for quiz generation.")
-			.addDropdown(dropdown =>
-				dropdown
-					.addOptions(perplexityTextGenModels)
-					.setValue(plugin.settings.perplexityTextGenModel)
-					.onChange(async (value) => {
-						plugin.settings.perplexityTextGenModel = value;
-						await plugin.saveSettings();
-					})
-			);
-	}
+	createProviderSettings(containerEl, plugin, refreshSettings, config, showAdvanced);
 };
 
 export default displayPerplexitySettings;

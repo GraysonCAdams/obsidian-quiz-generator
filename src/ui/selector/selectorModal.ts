@@ -104,6 +104,7 @@ export default class SelectorModal extends Modal {
 	private modelDisplayLink: HTMLAnchorElement | null = null; // Model display link beneath generate button
 	private focusUpdateHandler: (() => void) | null = null; // Handler for window focus events
 	private questionCountElement: HTMLElement | null = null; // Question count display element
+	private titlePromptInput: HTMLInputElement | null = null; // Title prompt input field
 
 	constructor(app: App, plugin: QuizGenerator, initialFiles?: TFile[], bookmarkId?: string, initialContentMode?: string) {
 		super(app);
@@ -231,6 +232,19 @@ export default class SelectorModal extends Modal {
 
 	private activateButtons(): Record<SelectorModalButton, HTMLButtonElement> {
 		const buttonContainer = this.contentEl.createDiv("modal-button-container-qg");
+		
+		// Add title prompt input field
+		const titleInputContainer = buttonContainer.createDiv("quiz-title-input-container-qg");
+		const titleInput = titleInputContainer.createEl("input", {
+			type: "text",
+			cls: "quiz-title-input-qg",
+			placeholder: "Optional: Enter title prompt (AI will generate title if left empty)"
+		});
+		titleInput.style.width = "100%";
+		titleInput.style.marginBottom = "0.75em";
+		titleInput.style.padding = "0.5em";
+		this.titlePromptInput = titleInput;
+		
 		const generateQuizButton = buttonContainer.createEl("button", { cls: "modal-button-qg mod-cta" });
 		const buttonMap: Record<SelectorModalButton, HTMLButtonElement> = {
 			[SelectorModalButton.CLEAR]: generateQuizButton, // Placeholder to maintain enum structure
@@ -407,10 +421,24 @@ export default class SelectorModal extends Modal {
 					await this.applyAutoTags();
 				}
 
+				// Step 6: Generate quiz title
+				progressModal.updateProgress(6, "Generating quiz title...");
+				let quizTitle: string | null = null;
+				try {
+					const titlePrompt = this.titlePromptInput?.value?.trim() || null;
+					const contentToUseForTitle = this.preparedContent.size > 0 
+						? [...this.preparedContent.values()]
+						: [...this.selectedNotes.values()];
+					quizTitle = await generator.generateQuizTitle(contentToUseForTitle, titlePrompt);
+				} catch (error) {
+					console.error("Error generating quiz title:", error);
+					// Continue with default naming if title generation fails
+				}
+
 				// Complete progress
 				progressModal.complete();
 
-				this.quiz = new QuizModalLogic(this.app, this.settings, questions, [...this.selectedNoteFiles.values()].flat(), undefined, undefined, undefined, this.plugin, this.contentSelectionMode);
+				this.quiz = new QuizModalLogic(this.app, this.settings, questions, [...this.selectedNoteFiles.values()].flat(), undefined, undefined, undefined, this.plugin, this.contentSelectionMode, quizTitle);
 				await this.quiz.renderQuiz();
 			} catch (error) {
 				progressModal.error((error as Error).message);
@@ -1094,7 +1122,6 @@ export default class SelectorModal extends Modal {
 							
 							// Only include backlinks that have recent changes (non-empty content)
 							if (content.trim().length === 0) {
-								console.log(`[collectBacklinkContents] Skipping ${backlinkFile.basename} - no recent changes`);
 								processedFiles.add(sourcePath); // Mark as processed so we don't try again
 								continue;
 							}
@@ -2263,11 +2290,9 @@ export default class SelectorModal extends Modal {
 			if (oldMode !== newValue && this.selectedNoteFiles.size > 0) {
 				if (newValue === ContentSelectionMode.CHANGES_ONLY) {
 					// Switching to changes mode - auto-calculate
-					console.log('[renderContentSelectionUI] Switching to changes mode, auto-calculating');
 					await this.calculateAllTokens();
 				} else {
 					// Switching to full page mode - immediately recalculate with full content
-					console.log('[renderContentSelectionUI] Switching to full page mode, recalculating');
 					this.needsRecalculation = false;
 					this.isCalculatingTokens = false;
 					
@@ -2642,12 +2667,6 @@ export default class SelectorModal extends Modal {
 		this.setLoadingCursor();
 		
 		try {
-			console.log('[calculateAllTokens] Starting calculation', {
-				mode: this.contentSelectionMode,
-				filterDate: this.filterDate,
-				totalFiles: this.selectedNoteFiles.size
-			});
-		
 		this.isCalculatingTokens = true;
 		this.tokenCalculationProgress = 0;
 		this.tokenCalculationCancelled = false;
@@ -2669,9 +2688,7 @@ export default class SelectorModal extends Modal {
 			
 			// If using content changes mode, extract only changes since selected date
 			if (this.contentSelectionMode === ContentSelectionMode.CHANGES_ONLY && this.filterDate !== "any") {
-				console.log(`[calculateAllTokens] Extracting changes for ${file.basename}`);
 				contentToStore = await this.extractContentChanges(file, noteContents);
-				console.log(`[calculateAllTokens] Changes extracted: ${contentToStore.length} chars`);
 			}
 			
 			this.selectedNotes.set(file.path, contentToStore);
@@ -2725,7 +2742,6 @@ export default class SelectorModal extends Modal {
 		} else {
 			this.isCalculatingTokens = false;
 			this.needsRecalculation = false;
-			console.log(`[calculateAllTokens] Completed: ${this.promptTokens} tokens`);
 		}
 		
 		// Refresh search results to show/hide items based on new token counts
@@ -2772,15 +2788,12 @@ export default class SelectorModal extends Modal {
 	): Promise<string> {
 		const dmp = new diff_match_patch();
 		
-		console.log(`[reconstructFileAtTime] Starting reconstruction, threshold: ${new Date(thresholdMs).toLocaleString()}, latest content length: ${latestStoredContent.length}`);
-		
 		// Find the last entry at or before threshold - this will be our base state
 		let lastEntryBeforeThreshold: {name: string, timestamp: number, isFull: boolean, zipEntry: JSZip.JSZipObject} | null = null;
 		for (let i = entries.length - 1; i >= 0; i--) {
 			const entry = entries[i];
 			if (entry.timestamp <= thresholdMs) {
 				lastEntryBeforeThreshold = entry;
-				console.log(`[reconstructFileAtTime] Found last entry at or before threshold: entry ${i} at ${new Date(entry.timestamp).toLocaleString()}`);
 				break;
 			}
 		}
@@ -2788,7 +2801,6 @@ export default class SelectorModal extends Modal {
 		// If no entry at or before threshold exists, all entries are after threshold
 		// In this case, the state at threshold is empty (file didn't exist or was empty)
 		if (!lastEntryBeforeThreshold) {
-			console.log(`[reconstructFileAtTime] No entry at or before threshold, returning empty state`);
 			return "";
 		}
 		
@@ -2801,37 +2813,29 @@ export default class SelectorModal extends Modal {
 		for (let i = entries.length - 1; i >= 0; i--) {
 			const entry = entries[i];
 			
-			console.log(`[reconstructFileAtTime] Processing entry ${i}: ${new Date(entry.timestamp).toLocaleString()} (${entry.timestamp}), isFull: ${entry.isFull}`);
-			
 			// Apply this edit backwards (patch goes newer -> older, so applying it goes back in time)
 			const diffContent = await entry.zipEntry.async("string");
 			
 			if (entry.isFull) {
 				// Full version stored - this is the state at this timestamp
 				// Use it as the starting point for applying older patches
-				console.log(`[reconstructFileAtTime] Entry ${i} is full version, using as starting point`);
 				data = diffContent;
-				console.log(`[reconstructFileAtTime] Data length after setting full version: ${data.length}`);
 			} else {
 				// Patch - apply it to go backwards in time
-				console.log(`[reconstructFileAtTime] Entry ${i} is patch, applying backwards. Patch length: ${diffContent.length}, data length before: ${data.length}`);
 				const patch = dmp.patch_fromText(diffContent);
 				const result = dmp.patch_apply(patch, data);
 				if (!result[1].every(x => x)) {
 					console.warn(`[reconstructFileAtTime] Some patches failed to apply`);
 				}
 				data = result[0]; // result[0] is the patched text, result[1] is success array
-				console.log(`[reconstructFileAtTime] Data length after applying patch: ${data.length}, patch success: ${result[1].every(x => x)}`);
 			}
 			
 			// Stop after we've processed the last entry at or before threshold
 			if (entry.timestamp <= thresholdMs) {
-				console.log(`[reconstructFileAtTime] Reached entry at or before threshold, stopping. Final state is at ${new Date(entry.timestamp).toLocaleString()}`);
 				break;
 			}
 		}
 		
-		console.log(`[reconstructFileAtTime] Reconstruction complete, final data length: ${data.length}`);
 		return data;
 	}
 	
@@ -2843,15 +2847,6 @@ export default class SelectorModal extends Modal {
 		const diffs = dmp.diff_main(oldContent, newContent);
 		dmp.diff_cleanupSemantic(diffs);
 		
-		console.log(`[extractNewContent] Old content length: ${oldContent.length}, new content length: ${newContent.length}`);
-		console.log(`[extractNewContent] Total diff operations: ${diffs.length}`);
-		
-		const insertOps = diffs.filter(([op]) => op === 1);
-		const deleteOps = diffs.filter(([op]) => op === -1);
-		const equalOps = diffs.filter(([op]) => op === 0);
-		
-		console.log(`[extractNewContent] Insert operations: ${insertOps.length}, Delete operations: ${deleteOps.length}, Equal operations: ${equalOps.length}`);
-		
 		// Extract only insertions (DiffOp.Insert = 1)
 		const newContentParts: string[] = [];
 		for (const [op, text] of diffs) {
@@ -2861,11 +2856,6 @@ export default class SelectorModal extends Modal {
 		}
 		
 		const extracted = newContentParts.join('');
-		console.log(`[extractNewContent] Extracted content length: ${extracted.length}`);
-		if (extracted.length > 0) {
-			console.log(`[extractNewContent] Extracted content preview: ${extracted.substring(0, 200)}...`);
-		}
-		
 		return extracted;
 	}
 	
@@ -2915,53 +2905,30 @@ export default class SelectorModal extends Modal {
 			
 			const thresholdMs = threshold.getTime();
 			
-			console.log(`[extractContentChanges] ${file.basename} - Threshold: ${new Date(thresholdMs).toLocaleString()} (${thresholdMs})`);
-			console.log(`[extractContentChanges] ${file.basename} - Current time: ${new Date().toLocaleString()} (${Date.now()})`);
-			
 			// Find the latest stored version (should be the last entry, which is stored in full)
 			const latestEntry = entries[entries.length - 1];
 			if (!latestEntry.isFull) {
 				console.warn(`[extractContentChanges] Latest entry is not stored in full, this shouldn't happen`);
 			}
 			
-			console.log(`[extractContentChanges] ${file.basename} - Latest entry timestamp: ${new Date(latestEntry.timestamp).toLocaleString()} (${latestEntry.timestamp})`);
-			
 			const dmp = new diff_match_patch();
 			const latestStoredContent = await latestEntry.zipEntry.async("string");
 			
-			console.log(`[extractContentChanges] ${file.basename} - Latest stored content length: ${latestStoredContent.length}`);
-			console.log(`[extractContentChanges] ${file.basename} - Current content length: ${currentContent.length}`);
-			
 			// Check if there are any edits after the threshold
 			const editsAfterThreshold = entries.filter(e => e.timestamp > thresholdMs);
-			console.log(`[extractContentChanges] ${file.basename} - Edits after threshold: ${editsAfterThreshold.length}`);
-			editsAfterThreshold.forEach((e, i) => {
-				console.log(`[extractContentChanges] ${file.basename} - Edit ${i} after threshold: ${new Date(e.timestamp).toLocaleString()} (${e.timestamp}) (${e.isFull ? 'FULL' : 'diff'})`);
-			});
 			
 			// Check if current file has changes not yet stored in .edtz
 			// Compare latest stored version with current content
 			const currentDiff = dmp.diff_main(latestStoredContent, currentContent);
 			const hasUnstoredChanges = currentDiff.some(([op]) => op !== 0); // Any non-equal operations
 			
-			console.log(`[extractContentChanges] ${file.basename} - Has unstored changes: ${hasUnstoredChanges}`);
-			if (hasUnstoredChanges) {
-				const unstoredDiffs = currentDiff.filter(([op]) => op !== 0);
-				console.log(`[extractContentChanges] ${file.basename} - Unstored diff operations: ${unstoredDiffs.length}`);
-				const unstoredInserts = currentDiff.filter(([op]) => op === 1);
-				const unstoredDeletes = currentDiff.filter(([op]) => op === -1);
-				console.log(`[extractContentChanges] ${file.basename} - Unstored inserts: ${unstoredInserts.length}, deletes: ${unstoredDeletes.length}`);
-			}
-			
 			// Check if file modification time is after threshold (indicating unstored changes after threshold)
 			const fileModTime = file.stat.mtime;
 			const hasRecentModifications = fileModTime > thresholdMs;
-			console.log(`[extractContentChanges] ${file.basename} - File mod time: ${new Date(fileModTime).toLocaleString()} (${fileModTime}), after threshold: ${hasRecentModifications}`);
 			
 			// Only return empty if there are no edits after threshold AND no unstored changes after threshold
 			if (editsAfterThreshold.length === 0 && !hasUnstoredChanges) {
 				// No edits after threshold and no unstored changes - return empty
-				console.log(`[extractContentChanges] ${file.basename} - No edits after threshold and no unstored changes, returning empty`);
 				return "";
 			}
 			
@@ -2971,10 +2938,8 @@ export default class SelectorModal extends Modal {
 				// If file was modified after threshold, we should process unstored changes
 				// Otherwise, the unstored changes happened before threshold, so return empty
 				if (!hasRecentModifications) {
-					console.log(`[extractContentChanges] ${file.basename} - Has unstored changes but file mod time is before threshold, returning empty`);
 					return "";
 				}
-				console.log(`[extractContentChanges] ${file.basename} - No edits in .edtz after threshold, but file has unstored changes after threshold, processing...`);
 			}
 			
 			// Reconstruct file state at threshold by going backwards from latest stored version
@@ -2982,11 +2947,9 @@ export default class SelectorModal extends Modal {
 			let stateAtThreshold: string;
 			if (latestEntry.timestamp <= thresholdMs) {
 				// Latest entry is at or before threshold, so state at threshold is the latest stored content
-				console.log(`[extractContentChanges] ${file.basename} - Latest entry is at or before threshold, using latest stored content as state at threshold`);
 				stateAtThreshold = latestStoredContent;
 			} else {
 				// Latest entry is after threshold, need to reconstruct backwards to threshold
-				console.log(`[extractContentChanges] ${file.basename} - Reconstructing state at threshold...`);
 				stateAtThreshold = await this.reconstructFileAtTime(
 					zip,
 					entries,
@@ -2995,26 +2958,15 @@ export default class SelectorModal extends Modal {
 				);
 			}
 			
-			console.log(`[extractContentChanges] ${file.basename} - State at threshold length: ${stateAtThreshold.length}`);
-			console.log(`[extractContentChanges] ${file.basename} - State at threshold preview: ${stateAtThreshold.substring(0, 100)}...`);
-			
 			// Calculate final state to compare against
 			const finalState = hasUnstoredChanges ? currentContent : latestStoredContent;
-			console.log(`[extractContentChanges] ${file.basename} - Final state length: ${finalState.length}`);
 			
 			// Extract only new content (insertions) added after threshold
-			console.log(`[extractContentChanges] ${file.basename} - Extracting new content from diff...`);
 			const newContent = this.extractNewContent(stateAtThreshold, finalState);
-			
-			console.log(`[extractContentChanges] ${file.basename} - New content extracted length: ${newContent.length}`);
-			if (newContent.length > 0) {
-				console.log(`[extractContentChanges] ${file.basename} - New content preview: ${newContent.substring(0, 200)}...`);
-			}
 			
 			// Clean up the content (remove frontmatter if needed)
 			const hasFrontMatter = getFrontMatterInfo(newContent).exists;
 			const cleanedContent = cleanUpNoteContents(newContent, hasFrontMatter);
-			console.log(`[extractContentChanges] ${file.basename} - Cleaned content length: ${cleanedContent.length}`);
 			
 			return cleanedContent;
 			

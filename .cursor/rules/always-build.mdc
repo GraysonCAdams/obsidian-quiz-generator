@@ -1,0 +1,5 @@
+---
+alwaysApply: true
+---
+
+always build succesfully after making changes, and always version increment

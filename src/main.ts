@@ -7,10 +7,12 @@ import { FilterEvaluator } from "./filters/filterEvaluator";
 import MissedQuestionsModal from "./ui/selector/missedQuestionsModal";
 import AudioCache from "./services/audioCache";
 import ExportModal from "./ui/export/exportModal";
+import QuizAnswerSpoiler from "./services/quizAnswerSpoiler";
 
 export default class QuizGenerator extends Plugin {
 	public settings: QuizSettings = DEFAULT_SETTINGS;
 	private bookmarkCommands: Command[] = [];
+	private quizAnswerSpoiler!: QuizAnswerSpoiler;
 
 	async onload(): Promise<void> {
 		this.addCommand({
@@ -35,9 +37,9 @@ export default class QuizGenerator extends Plugin {
 
 		this.addCommand({
 			id: "open-quiz-from-active-note",
-			name: "Open quiz from active note",
+			name: "Take quiz from active note",
 			callback: (): void => {
-				new QuizReviewer(this.app, this.settings).openQuiz(this.app.workspace.getActiveFile());
+				new QuizReviewer(this.app, this.settings, this).openQuiz(this.app.workspace.getActiveFile());
 			}
 		});
 
@@ -49,7 +51,7 @@ export default class QuizGenerator extends Plugin {
 							.setTitle("Open quiz from this note")
 							.setIcon("scroll-text")
 							.onClick((): void => {
-								new QuizReviewer(this.app, this.settings).openQuiz(file);
+								new QuizReviewer(this.app, this.settings, this).openQuiz(file);
 							});
 					});
 
@@ -98,6 +100,12 @@ export default class QuizGenerator extends Plugin {
 		await this.loadSettings();
 		this.registerBookmarkCommands();
 		this.addSettingTab(new QuizSettingsTab(this.app, this));
+		
+		// Register markdown post-processor for quiz answer spoiler
+		this.quizAnswerSpoiler = new QuizAnswerSpoiler(this.app, this);
+		this.registerMarkdownPostProcessor((el, ctx) => {
+			this.quizAnswerSpoiler.process(el, ctx);
+		});
 	}
 
 	onunload(): void {
@@ -137,7 +145,7 @@ export default class QuizGenerator extends Plugin {
 					// This bookmark no longer exists, remove its command
 					try {
 						// Accessing internal API for command removal
-						(this.app.commands as { removeCommand?: (id: string) => void }).removeCommand?.(`${this.manifest.id}:${commandId}`);
+						((this.app as { commands?: { removeCommand?: (id: string) => void } }).commands?.removeCommand)?.(`${this.manifest.id}:${commandId}`);
 					} catch (e) {
 						console.error(`Failed to remove command ${commandId}:`, e);
 					}
@@ -155,7 +163,7 @@ export default class QuizGenerator extends Plugin {
 			// First, try to remove any existing command with this ID (in case it wasn't tracked)
 			try {
 				// Accessing internal API for command removal
-				(this.app.commands as { removeCommand?: (id: string) => void }).removeCommand?.(`${this.manifest.id}:${commandId}`);
+				((this.app as { commands?: { removeCommand?: (id: string) => void } }).commands?.removeCommand)?.(`${this.manifest.id}:${commandId}`);
 			} catch (e) {
 				// Command might not exist, which is fine
 			}

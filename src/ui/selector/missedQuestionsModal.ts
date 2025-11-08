@@ -248,12 +248,18 @@ export default class MissedQuestionsModal extends Modal {
 		const orderContainer = controlsContainer.createDiv("order-control-container-qg");
 		orderContainer.createEl("label", { text: "Order:", cls: "order-label-qg" });
 		const orderDropdown = orderContainer.createEl("select", { cls: "order-dropdown-qg" });
-		orderDropdown.innerHTML = `
-			<option value="most-failed" ${this.orderOption === "most-failed" ? "selected" : ""}>Order by most failed</option>
-			<option value="oldest-newest" ${this.orderOption === "oldest-newest" ? "selected" : ""}>Order by oldest to newest</option>
-			<option value="newest-oldest" ${this.orderOption === "newest-oldest" ? "selected" : ""}>Order by newest to oldest</option>
-			<option value="random" ${this.orderOption === "random" ? "selected" : ""}>Order by random</option>
-		`;
+		
+		const option1 = orderDropdown.createEl("option", { value: "most-failed", text: "Order by most failed" });
+		if (this.orderOption === "most-failed") option1.selected = true;
+		
+		const option2 = orderDropdown.createEl("option", { value: "oldest-newest", text: "Order by oldest to newest" });
+		if (this.orderOption === "oldest-newest") option2.selected = true;
+		
+		const option3 = orderDropdown.createEl("option", { value: "newest-oldest", text: "Order by newest to oldest" });
+		if (this.orderOption === "newest-oldest") option3.selected = true;
+		
+		const option4 = orderDropdown.createEl("option", { value: "random", text: "Order by random" });
+		if (this.orderOption === "random") option4.selected = true;
 		orderDropdown.addEventListener("change", (e) => {
 			this.orderOption = (e.target as HTMLSelectElement).value as OrderOption;
 			this.renderQuizList(); // Re-render with new order

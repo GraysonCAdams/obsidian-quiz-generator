@@ -60,6 +60,34 @@ export const displayGeneralSettings = (containerEl: HTMLElement, plugin: QuizGen
 				})
 		);
 
+	new Setting(containerEl)
+		.setName("Hints")
+		.setDesc("Enable AI-generated hints for quiz questions. Hints can be viewed by clicking the [? Hint] button during a quiz.")
+		.addToggle(toggle =>
+			toggle
+				.setValue(plugin.settings.hintsEnabled ?? false)
+				.onChange(async (value) => {
+					plugin.settings.hintsEnabled = value;
+					await plugin.saveSettings();
+					// Refresh settings to show/hide max hints setting
+					if (refreshSettings) {
+						refreshSettings();
+					}
+				})
+		);
+
+	new Setting(containerEl)
+		.setName("Show results at end only")
+		.setDesc("When enabled, results and correct answers are only shown at the end of the quiz. When disabled, results are shown immediately upon submission.")
+		.addToggle(toggle =>
+			toggle
+				.setValue(plugin.settings.showResultsAtEndOnly ?? false)
+				.onChange(async (value) => {
+					plugin.settings.showResultsAtEndOnly = value;
+					await plugin.saveSettings();
+				})
+		);
+
 	// Custom Conversation Styles section (advanced only)
 	if (advanced) {
 		new Setting(containerEl).setName("Conversation Mode Styles").setHeading();
@@ -121,17 +149,24 @@ export const displayGamificationSettings = (containerEl: HTMLElement, plugin: Qu
 				})
 		);
 	
-	new Setting(containerEl)
+	// Read showResultsAtEndOnly dynamically each time settings are rendered
+	const showResultsAtEndOnly = plugin.settings.showResultsAtEndOnly ?? false;
+	const streakCounterSetting = new Setting(containerEl)
 		.setName("Show streak counter")
-		.setDesc("Display a counter showing consecutive correct answers during quiz.")
-		.addToggle(toggle =>
+		.setDesc(showResultsAtEndOnly 
+			? "Disabled when 'Show results at end only' is enabled. Streak counter requires immediate feedback to track consecutive correct answers."
+			: "Display a counter showing consecutive correct answers during quiz.")
+		.addToggle(toggle => {
 			toggle
 				.setValue(plugin.settings.gamification.showStreakCounter)
+				.setDisabled(showResultsAtEndOnly)
 				.onChange(async (value) => {
-					plugin.settings.gamification.showStreakCounter = value;
-					await plugin.saveSettings();
-				})
-		);
+					if (!showResultsAtEndOnly) {
+						plugin.settings.gamification.showStreakCounter = value;
+						await plugin.saveSettings();
+					}
+				});
+		});
 	
 	new Setting(containerEl)
 		.setName("Show timer")
@@ -171,17 +206,24 @@ export const displayGamificationSettings = (containerEl: HTMLElement, plugin: Qu
 					})
 			);
 		
-		new Setting(containerEl)
+		// Read showResultsAtEndOnly dynamically for flame effect setting too
+		const showResultsAtEndOnlyForFlame = plugin.settings.showResultsAtEndOnly ?? false;
+		const flameEffectSetting = new Setting(containerEl)
 			.setName("Enable flame effect")
-			.setDesc("Show animated flame effect around quiz card when reaching 5+ correct answers in a row.")
-			.addToggle(toggle =>
+			.setDesc(showResultsAtEndOnlyForFlame
+				? "Disabled when 'Show results at end only' is enabled. Flame effect requires immediate feedback to activate when reaching 5+ correct answers in a row."
+				: "Show animated flame effect around quiz card when reaching 5+ correct answers in a row.")
+			.addToggle(toggle => {
 				toggle
 					.setValue(plugin.settings.gamification.enableFlameEffect)
+					.setDisabled(showResultsAtEndOnlyForFlame)
 					.onChange(async (value) => {
-						plugin.settings.gamification.enableFlameEffect = value;
-						await plugin.saveSettings();
-					})
-			);
+						if (!showResultsAtEndOnlyForFlame) {
+							plugin.settings.gamification.enableFlameEffect = value;
+							await plugin.saveSettings();
+						}
+					});
+			});
 		
 		// Other Quiz Features
 		new Setting(containerEl).setName("Other Quiz Features").setHeading();
@@ -218,6 +260,40 @@ export const displayGamificationSettings = (containerEl: HTMLElement, plugin: Qu
 					.setValue(plugin.settings.gamification.showReflection)
 					.onChange(async (value) => {
 						plugin.settings.gamification.showReflection = value;
+						await plugin.saveSettings();
+					})
+			);
+
+		// Max hints per quiz - only show when hints are enabled
+		if (plugin.settings.hintsEnabled) {
+			new Setting(containerEl)
+				.setName("Max hints per quiz session")
+				.setDesc("Maximum number of hints allowed per quiz session. Leave empty or set to 0 for unlimited.")
+				.addText(text =>
+					text
+						.setPlaceholder("Unlimited")
+						.setValue(plugin.settings.gamification.maxHintsPerQuiz === null || plugin.settings.gamification.maxHintsPerQuiz === undefined ? "" : plugin.settings.gamification.maxHintsPerQuiz.toString())
+						.onChange(async (value) => {
+							const num = parseInt(value);
+							if (value === "" || isNaN(num) || num <= 0) {
+								plugin.settings.gamification.maxHintsPerQuiz = null;
+							} else {
+								plugin.settings.gamification.maxHintsPerQuiz = num;
+							}
+							await plugin.saveSettings();
+						})
+				);
+		}
+
+		// No cheating mode
+		new Setting(containerEl)
+			.setName("No cheating mode")
+			.setDesc("When enabled, the quiz will automatically fail if the Obsidian window loses focus or if the cursor leaves the quiz area. The final results screen will always be shown when gamification is enabled.")
+			.addToggle(toggle =>
+				toggle
+					.setValue(plugin.settings.gamification.noCheatingMode ?? false)
+					.onChange(async (value) => {
+						plugin.settings.gamification.noCheatingMode = value;
 						await plugin.saveSettings();
 					})
 			);
@@ -527,7 +603,7 @@ export const displaySoundNavigationSettings = (containerEl: HTMLElement, plugin:
 	new Setting(containerEl).setName("Sound Effects").setHeading();
 	
 	// Always visible: Core sound toggle
-	new Setting(containerEl)
+		new Setting(containerEl)
 		.setName("Enable sound effects")
 		.setDesc("Enable sound effects for correct/wrong answers and choosing options.")
 		.addToggle(toggle =>
@@ -536,6 +612,13 @@ export const displaySoundNavigationSettings = (containerEl: HTMLElement, plugin:
 				.onChange(async (value) => {
 					plugin.settings.gamification.soundEffectsEnabled = value;
 					await plugin.saveSettings();
+					
+					// Play feedback sound when enabled (at current volume level)
+					if (value) {
+						const currentVolume = plugin.settings.gamification.soundVolume ?? 50;
+						const tempSoundManager = new SoundManager(true, currentVolume / 100);
+						tempSoundManager.playDink();
+					}
 					// Refresh settings to show/hide volume slider
 					if (refreshSettings) {
 						refreshSettings();

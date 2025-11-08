@@ -58,6 +58,8 @@ export interface GamificationConfig {
 	paginationEnabled: boolean; // Allow manual navigation between questions
 	soundsMuted: boolean; // Session-level mute for sound effects
 	voiceMuted: boolean; // Session-level mute for voice
+	maxHintsPerQuiz: number | null; // Maximum hints allowed per quiz session (null = unlimited)
+	noCheatingMode: boolean; // When enabled, end quiz if window loses focus or cursor leaves quiz area
 }
 
 export type QuestionRandomizationMode = "all" | "within-subjects";
@@ -73,6 +75,9 @@ export interface GeneralConfig {
 	customConversationPromptDraft: string;
 	gamification: GamificationConfig;
 	showAdvancedSettings: boolean;
+	hintsEnabled: boolean; // Enable AI-generated hints for quiz questions
+	moreDetailsExpanded: boolean; // Track whether "More details" section is expanded in quiz summary
+	showResultsAtEndOnly: boolean; // Show results only at end vs upon submission
 }
 
 export const DEFAULT_GAMIFICATION_CONFIG: GamificationConfig = {
@@ -102,6 +107,8 @@ export const DEFAULT_GAMIFICATION_CONFIG: GamificationConfig = {
 	paginationEnabled: false, // Disabled by default - forces auto-progress
 	soundsMuted: false,
 	voiceMuted: false,
+	maxHintsPerQuiz: null, // Default: unlimited
+	noCheatingMode: false, // Default: no cheating mode disabled
 };
 
 export const DEFAULT_GENERAL_SETTINGS: GeneralConfig = {
@@ -115,4 +122,7 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralConfig = {
 	customConversationPromptDraft: "",
 	gamification: DEFAULT_GAMIFICATION_CONFIG,
 	showAdvancedSettings: false,
+	hintsEnabled: false, // Default: hints disabled
+	moreDetailsExpanded: true, // Default: expanded
+	showResultsAtEndOnly: false, // Default: show results upon submission
 };

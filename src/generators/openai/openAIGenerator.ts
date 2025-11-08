@@ -31,7 +31,7 @@ export default class OpenAIGenerator extends Generator {
 
 			return response.choices[0].message.content;
 		} catch (error) {
-			handleGenerationError(error);
+			return handleGenerationError(error);
 		}
 	}
 
@@ -44,7 +44,50 @@ export default class OpenAIGenerator extends Generator {
 
 			return cosineSimilarity(embedding.data[0].embedding, embedding.data[1].embedding);
 		} catch (error) {
-			handleEmbeddingError(error);
+			return handleEmbeddingError(error);
+		}
+	}
+
+	public async generateHint(question: string, answer: string | boolean | number | number[] | string[] | Array<{leftOption: string; rightOption: string}>, sourceContent?: string): Promise<string | null> {
+		try {
+			const answerText = this.formatAnswerForHint(answer);
+			const hintPrompt = this.createHintPrompt(question, answerText, sourceContent);
+
+			const response = await this.openai.chat.completions.create({
+				model: this.settings.openAITextGenModel,
+				messages: [
+					{ role: "system", content: "You are a helpful educational assistant that provides hints to guide students toward correct answers without giving them away." },
+					{ role: "user", content: hintPrompt },
+				],
+				max_tokens: 200,
+			});
+
+			return response.choices[0].message.content;
+		} catch (error) {
+			return handleGenerationError(error);
+		}
+	}
+
+	public async generateQuizTitle(contents: string[], titlePrompt?: string | null): Promise<string | null> {
+		try {
+			const titleGenerationPrompt = this.createTitlePrompt(contents, titlePrompt);
+
+			const response = await this.openai.chat.completions.create({
+				model: this.settings.openAITextGenModel,
+				messages: [
+					{ role: "system", content: "You are a helpful assistant that generates concise, descriptive titles for educational quizzes." },
+					{ role: "user", content: titleGenerationPrompt },
+				],
+				max_tokens: 100,
+				temperature: 0.7,
+			});
+
+			const title = response.choices[0].message.content?.trim();
+			// Remove quotes if present
+			return title ? title.replace(/^["']|["']$/g, "") : null;
+		} catch (error) {
+			console.error("Error generating quiz title:", error);
+			return null;
 		}
 	}
 }

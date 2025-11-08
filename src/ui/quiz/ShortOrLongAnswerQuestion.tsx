@@ -9,24 +9,32 @@ interface ShortOrLongAnswerQuestionProps {
 	app: App;
 	question: ShortOrLongAnswer;
 	settings: QuizSettings;
-	onAnswer?: (correct: boolean) => void;
+	onAnswer?: (correct: boolean, userAnswer?: any) => void;
 	onChoose?: () => void;
 	answered?: boolean;
 	onRepeat?: () => void;
 	showRepeat?: boolean;
+	hideResults?: boolean;
+	savedInput?: string;
+	onDraftChange?: (value: string) => void;
 }
 
-const ShortOrLongAnswerQuestion = ({ app, question, settings, onAnswer, onChoose, answered = false, onRepeat, showRepeat = false }: ShortOrLongAnswerQuestionProps) => {
+const ShortOrLongAnswerQuestion = ({ app, question, settings, onAnswer, onChoose, answered = false, onRepeat, showRepeat = false, hideResults = false, savedInput = "", onDraftChange }: ShortOrLongAnswerQuestionProps) => {
 	const [status, setStatus] = useState<"answering" | "evaluating" | "submitted">("answering");
 	const [similarityPercentage, setSimilarityPercentage] = useState<number | null>(null);
 	const [markedCorrect, setMarkedCorrect] = useState<boolean>(false);
 	
-	// If already answered, set status to submitted
+	// If already answered, set status to submitted (but allow editing in review mode)
 	useEffect(() => {
-		if (answered) {
+		if (answered && !hideResults) {
 			setStatus("submitted");
+			onDraftChange?.("");
+		} else if (answered && hideResults) {
+			// In review mode, keep status as "answering" to allow editing
+			// Don't clear draft - user should be able to continue editing
+			setStatus("answering");
 		}
-	}, [answered]);
+	}, [answered, hideResults, onDraftChange]);
 	const component = useMemo<Component>(() => new Component(), []);
 	const questionRef = useRef<HTMLDivElement>(null);
 	const answerRef = useRef<HTMLButtonElement>(null);
@@ -81,21 +89,33 @@ const ShortOrLongAnswerQuestion = ({ app, question, settings, onAnswer, onChoose
 	}, [app, question, component, showRepeat, onRepeat]);
 
 	useEffect(() => {
-		if (answerRef.current && status === "submitted") {
+		if (answerRef.current && status === "submitted" && !hideResults) {
 			MarkdownRenderer.render(app, question.answer, answerRef.current, "", component);
 		}
-	}, [app, question, component, status]);
+	}, [app, question, component, status, hideResults]);
 
 	const handleSubmit = async (input: string) => {
-		// If empty, mark as incorrect and reveal answer
+		// In review-at-end mode, Enter should ALWAYS navigate to next question (like pressing next page key)
+		// Don't submit, don't clear input, don't call onAnswer - just navigate
+		if (hideResults) {
+			// Always navigate in review mode, regardless of input content
+			// The draft is already saved via onChange callback, so we don't need to do anything else
+			const event = new CustomEvent('quiz-navigate-next');
+			window.dispatchEvent(event);
+			return;
+		}
+
+		// If empty (normal mode)
 		if (!input.trim()) {
 			setStatus("submitted");
 			setSimilarityPercentage(0);
 			new Notice("Incorrect: 0% match");
-			onAnswer?.(false);
+			onAnswer?.(false, "");
+			onDraftChange?.("");
 			return;
 		}
 
+		// Evaluate answer (only in normal mode)
 		try {
 			setStatus("evaluating");
 			new Notice("Evaluating answer...");
@@ -109,8 +129,9 @@ const ShortOrLongAnswerQuestion = ({ app, question, settings, onAnswer, onChoose
 			} else {
 				new Notice(`Incorrect: ${percentage}% match`);
 			}
-			onAnswer?.(correct);
+			onAnswer?.(correct, input.trim());
 			setStatus("submitted");
+			onDraftChange?.("");
 		} catch (error) {
 			setStatus("answering");
 			new Notice((error as Error).message, 0);
@@ -139,8 +160,8 @@ const ShortOrLongAnswerQuestion = ({ app, question, settings, onAnswer, onChoose
 	return (
 		<div className="question-container-qg">
 			<div className="question-qg" ref={questionRef} />
-			{status === "submitted" && <button className="answer-qg" ref={answerRef} />}
-			{(showOverride || showGotIt) && (
+			{status === "submitted" && !hideResults && <button className="answer-qg" ref={answerRef} />}
+			{!hideResults && (showOverride || showGotIt) && (
 				<div className="override-container-qg">
 					{showOverride && (
 						<button className="override-button-qg override-button-red-qg" onClick={handleMarkCorrect}>
@@ -154,13 +175,25 @@ const ShortOrLongAnswerQuestion = ({ app, question, settings, onAnswer, onChoose
 					)}
 				</div>
 			)}
-			{markedCorrect && (
+			{!hideResults && markedCorrect && (
 				<div className="override-notice-qg">
 					✓ Marked as correct
 				</div>
 			)}
 			<div className={status === "submitted" ? "input-container-qg" : "input-container-qg limit-height-qg"}>
-				<AnswerInput onSubmit={handleSubmit} clearInputOnSubmit={false} disabled={status !== "answering"} onChoose={onChoose} />
+				<AnswerInput
+					onSubmit={handleSubmit}
+					clearInputOnSubmit={false}
+					disabled={hideResults ? false : status !== "answering"}
+					onChoose={onChoose}
+					value={savedInput}
+					onChange={(value) => {
+						if (hideResults || status === "answering") {
+							onDraftChange?.(value);
+						}
+					}}
+					reviewMode={hideResults}
+				/>
 				<div className="instruction-footnote-qg">
 					Press enter to submit your answer. Press enter without typing to mark as incorrect and reveal the answer.
 				</div>

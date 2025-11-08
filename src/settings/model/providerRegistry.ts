@@ -13,7 +13,7 @@ import displayOllamaSettings from "./ollama/ollamaSettings";
  */
 type ProviderSettingsDisplay = (
 	containerEl: HTMLElement,
-	plugin: QuizGenerator,
+	plugin: InstanceType<typeof QuizGenerator>,
 	refreshSettings: () => void,
 	showAdvanced?: boolean
 ) => void;
@@ -40,7 +40,7 @@ const providerSettingsRegistry: Record<Provider, ProviderSettingsDisplay> = {
  */
 export const displayProviderSettings = (
 	containerEl: HTMLElement,
-	plugin: QuizGenerator,
+	plugin: InstanceType<typeof QuizGenerator>,
 	refreshSettings: () => void,
 	showAdvanced?: boolean
 ): void => {

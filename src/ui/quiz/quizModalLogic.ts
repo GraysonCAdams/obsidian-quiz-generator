@@ -36,8 +36,9 @@ export default class QuizModalLogic {
 	private readonly orderOverride?: OrderOption;
 	private readonly plugin?: QuizGenerator;
 	private readonly contentSelectionMode?: string; // "full" or "changes"
+	private readonly quizTitle?: string | null; // Custom quiz title
 
-	constructor(app: App, settings: QuizSettings, quiz: Question[], quizSources: TFile[], existingQuizFile?: TFile, questionWrongCounts?: Map<string, number>, orderOverride?: OrderOption, plugin?: QuizGenerator, contentSelectionMode?: string) {
+	constructor(app: App, settings: QuizSettings, quiz: Question[], quizSources: TFile[], existingQuizFile?: TFile, questionWrongCounts?: Map<string, number>, orderOverride?: OrderOption, plugin?: QuizGenerator, contentSelectionMode?: string, quizTitle?: string | null) {
 		this.app = app;
 		this.settings = settings;
 		this.quiz = quiz;
@@ -47,7 +48,8 @@ export default class QuizModalLogic {
 		this.orderOverride = orderOverride;
 		this.plugin = plugin;
 		this.contentSelectionMode = contentSelectionMode;
-		this.quizSaver = new QuizSaver(this.app, this.settings, this.quizSources, this.existingQuizFile, this.contentSelectionMode);
+		this.quizTitle = quizTitle;
+		this.quizSaver = new QuizSaver(this.app, this.settings, this.quizSources, this.existingQuizFile, this.contentSelectionMode, this.quizTitle);
 		this.handleEscapePressed = (event: KeyboardEvent): void => {
 			if (event.key === "Escape" && !(event.target instanceof HTMLInputElement)) {
 				this.removeQuiz();
@@ -193,7 +195,6 @@ export default class QuizModalLogic {
 
 		// If all are cached, skip generation and credit check
 		if (cachedCount === questionsToGenerate.length) {
-			console.log(`[QuizModalLogic] All ${questionsToGenerate.length} questions already cached, skipping generation`);
 			return true; // Continue to quiz
 		}
 
@@ -230,7 +231,6 @@ export default class QuizModalLogic {
 					estimatedCost,
 					async () => {
 						// Continue - proceed with audio generation
-						console.log('[QuizModalLogic] User confirmed - starting audio generation');
 						const progressModal = new AudioProgressModal(this.app);
 						progressModal.open();
 						
@@ -249,7 +249,6 @@ export default class QuizModalLogic {
 					},
 					async () => {
 						// Cancel - show prompt to disable audio
-						console.log('[QuizModalLogic] User cancelled - showing disable prompt');
 						
 						// Show a notice with an option to disable
 						const shouldDisable = confirm(
@@ -268,7 +267,6 @@ export default class QuizModalLogic {
 					},
 					async () => {
 						// Disable audio
-						console.log('[QuizModalLogic] User disabled audio');
 						if (this.plugin) {
 							this.plugin.settings.gamification!.elevenLabsEnabled = false;
 							await this.plugin.saveSettings();
@@ -329,8 +327,6 @@ export default class QuizModalLogic {
 				progressModal.updateProgress(current, total, cached);
 			}
 		);
-
-		console.log(`[QuizModalLogic] Audio generation complete: ${generatedAudio.size}/${questionsToGenerate.length} generated`);
 	}
 
 	private async getPreviousAttempts(): Promise<Map<string, boolean>> {

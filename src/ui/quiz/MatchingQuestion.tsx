@@ -6,21 +6,37 @@ import { shuffleArray } from "../../utils/helpers";
 interface MatchingQuestionProps {
 	app: App;
 	question: Matching;
-	onAnswer?: (correct: boolean) => void;
+	onAnswer?: (correct: boolean, userAnswer?: any) => void;
 	onChoose?: () => void;
 	answered?: boolean;
 	onRepeat?: () => void;
 	showRepeat?: boolean;
+	hideResults?: boolean;
+	savedUserAnswer?: any;
 }
 
-const MatchingQuestion = ({ app, question, onAnswer, onChoose, answered = false, onRepeat, showRepeat = false }: MatchingQuestionProps) => {
-	const [selectedLeft, setSelectedLeft] = useState<number | null>(null);
-	const [selectedRight, setSelectedRight] = useState<number | null>(null);
+interface Point {
+	x: number;
+	y: number;
+}
+
+const MatchingQuestion = ({ app, question, onAnswer, onChoose, answered = false, onRepeat, showRepeat = false, hideResults = false, savedUserAnswer }: MatchingQuestionProps) => {
 	const [selectedPairs, setSelectedPairs] = useState<{ leftIndex: number, rightIndex: number }[]>([]);
 	const [status, setStatus] = useState<"answering" | "submitted" | "reviewing">("answering");
 	const [focusedSide, setFocusedSide] = useState<"left" | "right" | null>(null);
 	const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
+	const [pendingSelection, setPendingSelection] = useState<{ side: "left" | "right", index: number } | null>(null);
+	
+	// Drag state
+	const [dragging, setDragging] = useState<{ side: "left" | "right", index: number } | null>(null);
+	const [dragPosition, setDragPosition] = useState<Point | null>(null);
+	
 	const containerRef = useRef<HTMLDivElement>(null);
+	const matchingContainerRef = useRef<HTMLDivElement>(null);
+	const svgOverlayRef = useRef<SVGSVGElement>(null);
+	const leftButtonRefs = useRef<(HTMLButtonElement | null)[]>([]);
+	const rightButtonRefs = useRef<(HTMLButtonElement | null)[]>([]);
+	const autoSubmittedRef = useRef<boolean>(false);
 	
 	// If already answered, set status to submitted
 	useEffect(() => {
@@ -37,6 +53,30 @@ const MatchingQuestion = ({ app, question, onAnswer, onChoose, answered = false,
 			shuffleArray(question.answer.map((pair, index) => ({ value: pair.rightOption, index }))),
 		[question]
 	);
+	
+	// Update selectedPairs when savedUserAnswer changes (e.g., when navigating back to question)
+	useEffect(() => {
+		if (savedUserAnswer && Array.isArray(savedUserAnswer)) {
+			const leftIndexMap = new Map<string, number>(leftOptions.map((option, index) => [option.value, index]));
+			const rightIndexMap = new Map<string, number>(rightOptions.map((option, index) => [option.value, index]));
+			
+			const restoredPairs = savedUserAnswer
+				.map((pair: { leftOption: string, rightOption: string }) => {
+					const leftIndex = leftIndexMap.get(pair.leftOption);
+					const rightIndex = rightIndexMap.get(pair.rightOption);
+					if (leftIndex !== undefined && rightIndex !== undefined) {
+						return { leftIndex, rightIndex };
+					}
+					return null;
+				})
+				.filter((pair): pair is { leftIndex: number, rightIndex: number } => pair !== null);
+			
+			setSelectedPairs(restoredPairs);
+		} else if (!savedUserAnswer) {
+			// Reset if no saved answer
+			setSelectedPairs([]);
+		}
+	}, [savedUserAnswer, leftOptions, rightOptions]);
 	const correctPairsMap = useMemo<Map<number, number>>(() => {
 		const leftIndexMap = new Map<string, number>(leftOptions.map((option, index) => [option.value, index]));
 		const rightIndexMap = new Map<string, number>(rightOptions.map((option, index) => [option.value, index]));
@@ -50,7 +90,6 @@ const MatchingQuestion = ({ app, question, onAnswer, onChoose, answered = false,
 	}, [question, leftOptions, rightOptions]);
 
 	const questionRef = useRef<HTMLDivElement>(null);
-	const buttonRefs = useRef<(HTMLButtonElement | null)[]>([]);
 	const repeatButtonRef = useRef<HTMLAnchorElement | null>(null);
 
 	useEffect(() => {
@@ -88,101 +127,267 @@ const MatchingQuestion = ({ app, question, onAnswer, onChoose, answered = false,
 			// Find the first paragraph or text element and insert inline
 			const firstParagraph = questionRef.current.querySelector('p');
 			if (firstParagraph) {
-				// Insert after the paragraph's content, but still within the paragraph
 				firstParagraph.appendChild(repeatLink);
 			} else {
-				// Fallback: find first text node or element and append inline
 				const firstElement = questionRef.current.firstElementChild || questionRef.current.firstChild;
 				if (firstElement && firstElement instanceof HTMLElement) {
 					firstElement.appendChild(repeatLink);
 				} else {
-					// Last resort: append to container
 					questionRef.current.appendChild(repeatLink);
 				}
 			}
 		}
 
-		buttonRefs.current = buttonRefs.current.slice(0, question.answer.length * 2);
-		question.answer.forEach((_, index) => {
-			const leftButton = buttonRefs.current[index * 2];
-			const rightButton = buttonRefs.current[index * 2 + 1];
-			if (leftButton) {
-				leftButton.empty();
-				MarkdownRenderer.render(app, leftOptions[index].value, leftButton, "", component);
+		// Render button content
+		leftButtonRefs.current.forEach((button, index) => {
+			if (button && index < leftOptions.length) {
+				button.empty();
+				MarkdownRenderer.render(app, leftOptions[index].value, button, "", component);
 			}
-			if (rightButton) {
-				rightButton.empty();
-				MarkdownRenderer.render(app, rightOptions[index].value, rightButton, "", component);
+		});
+		rightButtonRefs.current.forEach((button, index) => {
+			if (button && index < rightOptions.length) {
+				button.empty();
+				MarkdownRenderer.render(app, rightOptions[index].value, button, "", component);
 			}
 		});
 	}, [app, question, leftOptions, rightOptions, showRepeat, onRepeat]);
 
-	const handleLeftClick = (leftIndex: number) => {
-		if (onChoose) {
-			onChoose(); // Play choose sound when clicking
-		}
-		if (selectedLeft === leftIndex) {
-			setSelectedLeft(null);
-		} else if (selectedRight !== null) {
-			const pairToReplace = selectedPairs.find(pair => pair.leftIndex === leftIndex);
-			if (pairToReplace) {
-				setSelectedPairs(selectedPairs.map(pair =>
-					pair.rightIndex === pairToReplace.rightIndex ? { leftIndex: leftIndex, rightIndex: selectedRight } : pair
-				));
-			} else {
-				setSelectedPairs([...selectedPairs, { leftIndex: leftIndex, rightIndex: selectedRight }]);
+	// Get button edge position (for line connections)
+	const getButtonEdge = (side: "left" | "right", index: number): Point | null => {
+		const button = side === "left" 
+			? leftButtonRefs.current[index]
+			: rightButtonRefs.current[index];
+		if (!button || !matchingContainerRef.current) return null;
+		
+		const containerRect = matchingContainerRef.current.getBoundingClientRect();
+		const buttonRect = button.getBoundingClientRect();
+		// For left buttons, use right edge; for right buttons, use left edge
+		const x = side === "left" 
+			? buttonRect.right - containerRect.left
+			: buttonRect.left - containerRect.left;
+		const y = buttonRect.top + buttonRect.height / 2 - containerRect.top;
+		return { x, y };
+	};
+	
+	// Get button center position (for drag start)
+	const getButtonCenter = (side: "left" | "right", index: number): Point | null => {
+		const button = side === "left" 
+			? leftButtonRefs.current[index]
+			: rightButtonRefs.current[index];
+		if (!button || !matchingContainerRef.current) return null;
+		
+		const containerRect = matchingContainerRef.current.getBoundingClientRect();
+		const buttonRect = button.getBoundingClientRect();
+		return {
+			x: buttonRect.left + buttonRect.width / 2 - containerRect.left,
+			y: buttonRect.top + buttonRect.height / 2 - containerRect.top
+		};
+	};
+	
+	// Generate colors for each match pair
+	const getMatchColor = (pairIndex: number): string => {
+		const colors = [
+			'var(--text-accent)',
+			'var(--text-success)',
+			'var(--text-error)',
+			'#8b5cf6', // purple
+			'#06b6d4', // cyan
+			'#f59e0b', // amber
+			'#ef4444', // red
+			'#10b981', // green
+			'#3b82f6', // blue
+		];
+		return colors[pairIndex % colors.length];
+	};
+
+	// Find which button is at the given point
+	const findButtonAtPoint = (point: Point): { side: "left" | "right", index: number } | null => {
+		if (!matchingContainerRef.current) return null;
+		const containerRect = matchingContainerRef.current.getBoundingClientRect();
+		const clientX = point.x + containerRect.left;
+		const clientY = point.y + containerRect.top;
+		
+		// Check left buttons
+		for (let i = 0; i < leftButtonRefs.current.length; i++) {
+			const button = leftButtonRefs.current[i];
+			if (button) {
+				const rect = button.getBoundingClientRect();
+				if (clientX >= rect.left && clientX <= rect.right &&
+					clientY >= rect.top && clientY <= rect.bottom) {
+					return { side: "left", index: i };
+				}
 			}
-			setSelectedLeft(null);
-			setSelectedRight(null);
-		} else if (!selectedPairs.some(pair => pair.leftIndex === leftIndex)) {
-			setSelectedLeft(leftIndex);
 		}
-	};
-
-	const handleRightClick = (rightIndex: number) => {
-		if (onChoose) {
-			onChoose(); // Play choose sound when clicking
-		}
-		if (selectedRight === rightIndex) {
-			setSelectedRight(null);
-		} else if (selectedLeft !== null) {
-			const pairToReplace = selectedPairs.find(pair => pair.rightIndex === rightIndex);
-			if (pairToReplace) {
-				setSelectedPairs(selectedPairs.map(pair =>
-					pair.leftIndex === pairToReplace.leftIndex ? { leftIndex: selectedLeft, rightIndex: rightIndex } : pair
-				));
-			} else {
-				setSelectedPairs([...selectedPairs, { leftIndex: selectedLeft, rightIndex: rightIndex }]);
+		
+		// Check right buttons
+		for (let i = 0; i < rightButtonRefs.current.length; i++) {
+			const button = rightButtonRefs.current[i];
+			if (button) {
+				const rect = button.getBoundingClientRect();
+				if (clientX >= rect.left && clientX <= rect.right &&
+					clientY >= rect.top && clientY <= rect.bottom) {
+					return { side: "right", index: i };
+				}
 			}
-			setSelectedLeft(null);
-			setSelectedRight(null);
-		} else if (!selectedPairs.some(pair => pair.rightIndex === rightIndex)) {
-			setSelectedRight(rightIndex);
+		}
+		
+		return null;
+	};
+
+	// Handle drag start
+	const handleDragStart = (side: "left" | "right", index: number, event: React.MouseEvent | React.TouchEvent) => {
+		// Allow editing in review-at-end mode
+		const canEdit = hideResults || status === "answering";
+		if (!canEdit) return;
+		
+		// If editing in review-at-end mode, reset status to allow re-submission
+		if (hideResults && status === "submitted") {
+			setStatus("answering");
+			autoSubmittedRef.current = false;
+		}
+		
+		event.preventDefault();
+		event.stopPropagation();
+		
+		if (onChoose) {
+			onChoose();
+		}
+		
+		setDragging({ side, index });
+		const point = side === "left" 
+			? getButtonCenter("left", index)
+			: getButtonCenter("right", index);
+		if (point) {
+			setDragPosition(point);
 		}
 	};
 
-	const handleLeftDoubleClick = (leftIndex: number) => {
-		setSelectedPairs(selectedPairs.filter(pair => pair.leftIndex !== leftIndex));
+	// Handle drag move
+	const handleDragMove = (event: MouseEvent | TouchEvent) => {
+		if (!dragging || !matchingContainerRef.current) return;
+		
+		const clientX = 'touches' in event ? event.touches[0].clientX : event.clientX;
+		const clientY = 'touches' in event ? event.touches[0].clientY : event.clientY;
+		const containerRect = matchingContainerRef.current.getBoundingClientRect();
+		
+		setDragPosition({
+			x: clientX - containerRect.left,
+			y: clientY - containerRect.top
+		});
 	};
 
-	const handleRightDoubleClick = (rightIndex: number) => {
-		setSelectedPairs(selectedPairs.filter(pair => pair.rightIndex !== rightIndex));
+	// Handle drag end
+	const handleDragEnd = (event: MouseEvent | TouchEvent) => {
+		if (!dragging || !dragPosition) {
+			setDragging(null);
+			setDragPosition(null);
+			return;
+		}
+		
+		const clientX = 'changedTouches' in event ? event.changedTouches[0].clientX : (event as MouseEvent).clientX;
+		const clientY = 'changedTouches' in event ? event.changedTouches[0].clientY : (event as MouseEvent).clientY;
+		
+		if (!matchingContainerRef.current) {
+			setDragging(null);
+			setDragPosition(null);
+			return;
+		}
+		
+		const containerRect = matchingContainerRef.current.getBoundingClientRect();
+		const point: Point = {
+			x: clientX - containerRect.left,
+			y: clientY - containerRect.top
+		};
+		
+		const targetButton = findButtonAtPoint(point);
+		
+		if (targetButton) {
+			// If dragging from left to right
+			if (dragging.side === "left" && targetButton.side === "right") {
+				// Remove any existing connection from this left item
+				const newPairs = selectedPairs.filter(pair => pair.leftIndex !== dragging.index);
+				// Remove any existing connection to this right item
+				const finalPairs = newPairs.filter(pair => pair.rightIndex !== targetButton.index);
+				// Add new connection
+				setSelectedPairs([...finalPairs, { leftIndex: dragging.index, rightIndex: targetButton.index }]);
+			}
+			// If dragging from right to left
+			else if (dragging.side === "right" && targetButton.side === "left") {
+				// Remove any existing connection from this right item
+				const newPairs = selectedPairs.filter(pair => pair.rightIndex !== dragging.index);
+				// Remove any existing connection to this left item
+				const finalPairs = newPairs.filter(pair => pair.leftIndex !== targetButton.index);
+				// Add new connection
+				setSelectedPairs([...finalPairs, { leftIndex: targetButton.index, rightIndex: dragging.index }]);
+			}
+		}
+		
+		setDragging(null);
+		setDragPosition(null);
+	};
+
+	// Set up drag event listeners
+	useEffect(() => {
+		if (!dragging) return;
+		
+		const handleMouseMove = (e: MouseEvent) => handleDragMove(e);
+		const handleMouseUp = (e: MouseEvent) => handleDragEnd(e);
+		const handleTouchMove = (e: TouchEvent) => {
+			e.preventDefault();
+			handleDragMove(e);
+		};
+		const handleTouchEnd = (e: TouchEvent) => handleDragEnd(e);
+		
+		window.addEventListener('mousemove', handleMouseMove);
+		window.addEventListener('mouseup', handleMouseUp);
+		window.addEventListener('touchmove', handleTouchMove, { passive: false });
+		window.addEventListener('touchend', handleTouchEnd);
+		
+		return () => {
+			window.removeEventListener('mousemove', handleMouseMove);
+			window.removeEventListener('mouseup', handleMouseUp);
+			window.removeEventListener('touchmove', handleTouchMove);
+			window.removeEventListener('touchend', handleTouchEnd);
+		};
+	}, [dragging, dragPosition]);
+
+	// Remove connection by clicking on a button that's already connected
+	const handleButtonClick = (side: "left" | "right", index: number) => {
+		// Allow editing in review-at-end mode
+		const canEdit = hideResults || status === "answering";
+		if (!canEdit) return;
+		
+		// If editing in review-at-end mode, reset status to allow re-submission
+		if (hideResults && status === "submitted") {
+			setStatus("answering");
+			autoSubmittedRef.current = false;
+		}
+		
+		if (side === "left") {
+			setSelectedPairs(selectedPairs.filter(pair => pair.leftIndex !== index));
+		} else {
+			setSelectedPairs(selectedPairs.filter(pair => pair.rightIndex !== index));
+		}
 	};
 
 	const getLeftButtonClass = (leftIndex: number): string => {
 		let baseClass = "matching-button-qg";
 		
-		// Add focused class if this button is focused
 		if (focusedSide === "left" && focusedIndex === leftIndex && status === "answering") {
 			baseClass += " focused-choice-qg";
 		}
 		
-		if (status === "answering" &&
-			(selectedLeft === leftIndex || selectedPairs.some(pair => pair.leftIndex === leftIndex))) {
+		if (status === "answering" && selectedPairs.some(pair => pair.leftIndex === leftIndex)) {
 			return `${baseClass} selected-choice-qg`;
 		}
 
 		if (status === "submitted") {
+			if (hideResults) {
+				return selectedPairs.some(pair => pair.leftIndex === leftIndex) 
+					? `${baseClass} selected-choice-qg` 
+					: baseClass;
+			}
 			const rightIndex = correctPairsMap.get(leftIndex);
 			const correct = selectedPairs.some(pair => pair.leftIndex === leftIndex && pair.rightIndex === rightIndex);
 			return correct ? `${baseClass} correct-choice-qg` : `${baseClass} incorrect-choice-qg`;
@@ -200,17 +405,20 @@ const MatchingQuestion = ({ app, question, onAnswer, onChoose, answered = false,
 	const getRightButtonClass = (rightIndex: number): string => {
 		let baseClass = "matching-button-qg";
 		
-		// Add focused class if this button is focused
 		if (focusedSide === "right" && focusedIndex === rightIndex && status === "answering") {
 			baseClass += " focused-choice-qg";
 		}
 		
-		if (status === "answering" &&
-			(selectedRight === rightIndex || selectedPairs.some(pair => pair.rightIndex === rightIndex))) {
+		if (status === "answering" && selectedPairs.some(pair => pair.rightIndex === rightIndex)) {
 			return `${baseClass} selected-choice-qg`;
 		}
 
 		if (status === "submitted") {
+			if (hideResults) {
+				return selectedPairs.some(pair => pair.rightIndex === rightIndex)
+					? `${baseClass} selected-choice-qg`
+					: baseClass;
+			}
 			const leftIndex = selectedPairs.find(pair => pair.rightIndex === rightIndex)?.leftIndex;
 			if (leftIndex !== undefined) {
 				const correctRightIndex = correctPairsMap.get(leftIndex);
@@ -231,54 +439,153 @@ const MatchingQuestion = ({ app, question, onAnswer, onChoose, answered = false,
 		return baseClass;
 	};
 
+	// Render lines in SVG
+	useEffect(() => {
+		if (!svgOverlayRef.current || !matchingContainerRef.current) return;
+		
+		const svg = svgOverlayRef.current;
+		svg.innerHTML = '';
+		
+		// Draw existing connections - use edge positions and unique colors
+		selectedPairs.forEach((pair, pairIndex) => {
+			const leftPoint = getButtonEdge("left", pair.leftIndex);
+			const rightPoint = getButtonEdge("right", pair.rightIndex);
+			
+			if (leftPoint && rightPoint) {
+				const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+				line.setAttribute('x1', leftPoint.x.toString());
+				line.setAttribute('y1', leftPoint.y.toString());
+				line.setAttribute('x2', rightPoint.x.toString());
+				line.setAttribute('y2', rightPoint.y.toString());
+				line.setAttribute('stroke-width', '2');
+				line.setAttribute('class', 'matching-line-qg');
+				
+				// Add color based on status
+				if (status === "submitted") {
+					if (!hideResults) {
+						const correct = correctPairsMap.get(pair.leftIndex) === pair.rightIndex;
+						line.setAttribute('stroke', correct ? 'var(--text-success)' : 'var(--text-error)');
+					} else {
+						// Use unique color for each pair when hiding results
+						line.setAttribute('stroke', getMatchColor(pairIndex));
+					}
+				} else if (status === "reviewing") {
+					const correct = correctPairsMap.get(pair.leftIndex) === pair.rightIndex;
+					line.setAttribute('stroke', correct ? 'var(--text-success)' : 'var(--text-error)');
+					if (!correct) {
+						line.setAttribute('stroke-dasharray', '5,5');
+					}
+				} else {
+					// Use unique color for each pair when answering
+					line.setAttribute('stroke', getMatchColor(pairIndex));
+				}
+				
+				svg.appendChild(line);
+			}
+		});
+		
+		// Draw current drag line - use edge for start point
+		if (dragging && dragPosition) {
+			const startPoint = dragging.side === "left"
+				? getButtonEdge("left", dragging.index)
+				: getButtonEdge("right", dragging.index);
+			
+			if (startPoint) {
+				const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+				line.setAttribute('x1', startPoint.x.toString());
+				line.setAttribute('y1', startPoint.y.toString());
+				line.setAttribute('x2', dragPosition.x.toString());
+				line.setAttribute('y2', dragPosition.y.toString());
+				line.setAttribute('stroke', 'var(--text-accent)');
+				line.setAttribute('stroke-width', '2');
+				line.setAttribute('stroke-dasharray', '5,5');
+				line.setAttribute('class', 'matching-drag-line-qg');
+				svg.appendChild(line);
+			}
+		}
+	}, [selectedPairs, dragging, dragPosition, status, correctPairsMap, hideResults]);
+
 	// Keyboard navigation handler
 	useEffect(() => {
-		if (status !== "answering") return;
+		// Allow editing in review-at-end mode
+		const canEdit = hideResults || status === "answering";
+		if (!canEdit) return;
 
 		const handleKeyDown = (event: KeyboardEvent) => {
-			// Don't handle if in an input field
 			const target = event.target as HTMLElement;
 			if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
 				return;
 			}
 
-			// Check if we're in a modal (avoid interfering with other modals like credit check)
 			const activeModal = document.querySelector('.modal.is-open');
 			if (activeModal && !activeModal.querySelector('.modal-qg')) {
-				return; // Don't handle if another modal is open
+				return;
 			}
 
-			const totalOptions = question.answer.length * 2; // Left + Right options
+			const totalOptions = question.answer.length * 2;
 
-			// Number keys should work globally when the question is visible
 			if (/^[1-9]$/.test(event.key) || /^Numpad[1-9]$/.test(event.key)) {
-				// Handle number keys (1-9) and numpad keys for matching
 				event.preventDefault();
 				const numKey = event.key.startsWith('Numpad') 
 					? parseInt(event.key.replace('Numpad', ''), 10)
 					: parseInt(event.key, 10);
-				// Number keys map to left options first (1-N), then right options (N+1 to 2N)
+				
+				let selectedSide: "left" | "right";
+				let selectedIndex: number;
+				
 				if (numKey <= question.answer.length) {
-					// Left side option
-					const leftIndex = numKey - 1;
-					if (leftIndex >= 0 && leftIndex < question.answer.length) {
-						setFocusedSide("left");
-						setFocusedIndex(leftIndex);
-						handleLeftClick(leftIndex);
+					selectedSide = "left";
+					selectedIndex = numKey - 1;
+				} else {
+					selectedSide = "right";
+					selectedIndex = numKey - question.answer.length - 1;
+				}
+				
+				if (selectedIndex < 0 || selectedIndex >= question.answer.length) {
+					return;
+				}
+				
+				setFocusedSide(selectedSide);
+				setFocusedIndex(selectedIndex);
+				
+				// If there's a pending selection, try to chain them
+				if (pendingSelection) {
+					// Check if same key pressed twice (unlink)
+					if (pendingSelection.side === selectedSide && pendingSelection.index === selectedIndex) {
+						// Unlink: remove any connections involving this option
+						if (selectedSide === "left") {
+							setSelectedPairs(selectedPairs.filter(pair => pair.leftIndex !== selectedIndex));
+						} else {
+							setSelectedPairs(selectedPairs.filter(pair => pair.rightIndex !== selectedIndex));
+						}
+						setPendingSelection(null);
+					} else if (pendingSelection.side !== selectedSide) {
+						// Chain: connect left to right or right to left
+						if (pendingSelection.side === "left") {
+							// Remove any existing connections from left or to right
+							const newPairs = selectedPairs.filter(
+								pair => pair.leftIndex !== pendingSelection.index && pair.rightIndex !== selectedIndex
+							);
+							setSelectedPairs([...newPairs, { leftIndex: pendingSelection.index, rightIndex: selectedIndex }]);
+						} else {
+							// Remove any existing connections from right or to left
+							const newPairs = selectedPairs.filter(
+								pair => pair.rightIndex !== pendingSelection.index && pair.leftIndex !== selectedIndex
+							);
+							setSelectedPairs([...newPairs, { leftIndex: selectedIndex, rightIndex: pendingSelection.index }]);
+						}
+						setPendingSelection(null);
+					} else {
+						// Same side, different index - replace pending selection
+						setPendingSelection({ side: selectedSide, index: selectedIndex });
 					}
 				} else {
-					// Right side option
-					const rightIndex = numKey - question.answer.length - 1;
-					if (rightIndex >= 0 && rightIndex < question.answer.length) {
-						setFocusedSide("right");
-						setFocusedIndex(rightIndex);
-						handleRightClick(rightIndex);
-					}
+					// No pending selection, set this as pending
+					setPendingSelection({ side: selectedSide, index: selectedIndex });
 				}
 				return;
 			}
 
-			// Tab and Space only work if container is focused
 			if (!containerRef.current?.contains(document.activeElement) && 
 				document.activeElement !== containerRef.current) {
 				return;
@@ -286,7 +593,6 @@ const MatchingQuestion = ({ app, question, onAnswer, onChoose, answered = false,
 
 			if (event.key === 'Tab') {
 				event.preventDefault();
-				// Calculate current position: left options are 0 to length-1, right options are length to 2*length-1
 				let currentPos = -1;
 				if (focusedSide === "left" && focusedIndex !== null) {
 					currentPos = focusedIndex;
@@ -304,107 +610,112 @@ const MatchingQuestion = ({ app, question, onAnswer, onChoose, answered = false,
 				} else {
 					setFocusedSide("right");
 					setFocusedIndex(nextPos - question.answer.length);
-			}
-			} else if (event.key === ' ') {
-				event.preventDefault();
-				if (focusedSide !== null && focusedIndex !== null) {
-					if (focusedSide === "left") {
-						handleLeftClick(focusedIndex);
-					} else {
-						handleRightClick(focusedIndex);
-					}
-				} else if (question.answer.length > 0) {
-					// If nothing focused, start with first left option
-					setFocusedSide("left");
-					setFocusedIndex(0);
 				}
 			}
 		};
 
 		document.addEventListener('keydown', handleKeyDown);
 		return () => document.removeEventListener('keydown', handleKeyDown);
-	}, [focusedSide, focusedIndex, status, question.answer.length]);
+	}, [focusedSide, focusedIndex, status, question.answer.length, pendingSelection, selectedPairs]);
 
+	// Auto-submit when all pairs are selected in review-at-end mode (but allow editing)
+	useEffect(() => {
+		if (hideResults && status === "answering" && selectedPairs.length === question.answer.length && !autoSubmittedRef.current) {
+			autoSubmittedRef.current = true;
+			// Don't calculate correctness in review-at-end mode, just store the answer
+			const userAnswerPairs = selectedPairs.map(pair => ({
+				leftOption: leftOptions[pair.leftIndex]?.value || "",
+				rightOption: rightOptions[pair.rightIndex]?.value || ""
+			}));
+			onAnswer?.(false, userAnswerPairs); // Pass false for correct, will be calculated later
+			setStatus("submitted");
+			setFocusedSide(null);
+			setFocusedIndex(null);
+		}
+	}, [hideResults, status, selectedPairs.length, question.answer.length, selectedPairs, correctPairsMap, leftOptions, rightOptions, onAnswer]);
+	
 	// Reset focus when question changes
 	useEffect(() => {
 		setFocusedSide(null);
 		setFocusedIndex(null);
+		setDragging(null);
+		setDragPosition(null);
+		setPendingSelection(null);
+		autoSubmittedRef.current = false;
 	}, [question]);
 
 	return (
 		<div className="question-container-qg" ref={containerRef} tabIndex={-1}>
 			<div className="question-qg" ref={questionRef} />
-			<div className="matching-container-qg">
-				{question.answer.map((_, index) => (
-					<Fragment key={index}>
-						<div className="matching-button-container-qg">
-							<svg className="svg-left-qg" viewBox="0 0 40 40">
-								<circle className="svg-circle-qg" cx="20" cy="20" r="18" />
-								<text className="svg-circle-text-qg" x="20" y="26">
-									{(() => {
-										const pairIndex = status === "reviewing"
-											? Array.from(correctPairsMap.keys()).findIndex(leftIndex => leftIndex === index)
-											: selectedPairs.findIndex(pair => pair.leftIndex === index);
-										return pairIndex === -1 ? "" : pairIndex + 1;
-									})()}
-								</text>
-							</svg>
-							<button
-								ref={el => buttonRefs.current[index * 2] = el}
-								className={getLeftButtonClass(index)}
-								onClick={() => handleLeftClick(index)}
-								onDoubleClick={() => handleLeftDoubleClick(index)}
-								disabled={status !== "answering"}
-								data-choice-number={index + 1}
-							/>
-						</div>
-						<div className="matching-button-container-qg">
-							<svg className="svg-right-qg" viewBox="0 0 40 40">
-								<circle className="svg-circle-qg" cx="20" cy="20" r="18" />
-								<text className="svg-circle-text-qg" x="20" y="26">
-									{(() => {
-										const pairIndex = status === "reviewing"
-											? Array.from(correctPairsMap.values()).findIndex(rightIndex => rightIndex === index)
-											: selectedPairs.findIndex(pair => pair.rightIndex === index);
-										return pairIndex === -1 ? "" : pairIndex + 1;
-									})()}
-								</text>
-							</svg>
-							<button
-								ref={(el) => buttonRefs.current[index * 2 + 1] = el}
-								className={getRightButtonClass(index)}
-								onClick={() => handleRightClick(index)}
-								onDoubleClick={() => handleRightDoubleClick(index)}
-								disabled={status !== "answering"}
-								data-choice-number={index + question.answer.length + 1}
-							/>
-						</div>
-					</Fragment>
-				))}
-			</div>
-			<button
-				className="submit-answer-qg"
-				onClick={() => {
-					if (status === "answering") {
-						// Check if all pairs are correct
-						const allCorrect = selectedPairs.every(pair => 
-							correctPairsMap.get(pair.leftIndex) === pair.rightIndex
+			<div className="matching-container-qg" ref={matchingContainerRef}>
+				<svg 
+					ref={svgOverlayRef}
+					className="matching-lines-overlay-qg"
+					style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 1 }}
+				/>
+				<div className="matching-left-column-qg">
+					{leftOptions.map((option, index) => {
+						const canEdit = hideResults || status === "answering";
+						return (
+							<div key={index} className="matching-button-container-qg">
+								<button
+									ref={el => leftButtonRefs.current[index] = el}
+									className={getLeftButtonClass(index)}
+									onMouseDown={(e) => handleDragStart("left", index, e)}
+									onTouchStart={(e) => handleDragStart("left", index, e)}
+									onClick={() => handleButtonClick("left", index)}
+									disabled={!canEdit}
+									data-choice-number={index + 1}
+								/>
+							</div>
 						);
-						onAnswer?.(allCorrect);
-						setStatus("submitted");
-						setFocusedSide(null);
-						setFocusedIndex(null);
-					} else {
-						setStatus("reviewing");
+					})}
+				</div>
+				<div className="matching-right-column-qg">
+					{rightOptions.map((option, index) => {
+						const canEdit = hideResults || status === "answering";
+						return (
+							<div key={index} className="matching-button-container-qg">
+								<button
+									ref={el => rightButtonRefs.current[index] = el}
+									className={getRightButtonClass(index)}
+									onMouseDown={(e) => handleDragStart("right", index, e)}
+									onTouchStart={(e) => handleDragStart("right", index, e)}
+									onClick={() => handleButtonClick("right", index)}
+									disabled={!canEdit}
+									data-choice-number={index + question.answer.length + 1}
+								/>
+							</div>
+						);
+					})}
+				</div>
+			</div>
+			{!hideResults && (
+				<button
+					className="submit-answer-qg"
+					onClick={() => {
+						if (status === "answering") {
+							const allCorrect = selectedPairs.every(pair => 
+								correctPairsMap.get(pair.leftIndex) === pair.rightIndex
+							);
+							const userAnswerPairs = selectedPairs.map(pair => ({
+								leftOption: leftOptions[pair.leftIndex]?.value || "",
+								rightOption: rightOptions[pair.rightIndex]?.value || ""
+							}));
+							onAnswer?.(allCorrect, userAnswerPairs);
+							setStatus("submitted");
+							setFocusedSide(null);
+							setFocusedIndex(null);
+						}
+					}}
+					disabled={
+						status !== "answering" ||
+						selectedPairs.length !== question.answer.length
 					}
-				}}
-				disabled={
-					status !== "answering" ||
-					selectedPairs.length !== question.answer.length
-				}
-			>
-				{status === "answering" ? "Submit" : "Reveal answer"}
-			</button>
+				>
+					Submit
+				</button>
+			)}
 		</div>
 	);
 };

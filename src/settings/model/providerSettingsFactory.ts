@@ -7,14 +7,14 @@ import { createPasswordSetting, createBaseURLSetting, createModelDropdownSetting
  */
 export interface ProviderSettingsConfig {
 	providerName: string;
-	apiKeyField: keyof QuizGenerator["settings"];
+	apiKeyField: keyof InstanceType<typeof QuizGenerator>["settings"];
 	apiKeyDescription: string;
-	baseURLField: keyof QuizGenerator["settings"];
+	baseURLField: keyof InstanceType<typeof QuizGenerator>["settings"];
 	baseURLDescription: string;
 	defaultBaseURL: string;
-	textGenModelField: keyof QuizGenerator["settings"];
+	textGenModelField: keyof InstanceType<typeof QuizGenerator>["settings"];
 	textGenModels: Record<string, string>;
-	embeddingModelField?: keyof QuizGenerator["settings"];
+	embeddingModelField?: keyof InstanceType<typeof QuizGenerator>["settings"];
 	embeddingModels?: Record<string, string>;
 	hasEmbedding: boolean;
 }
@@ -24,7 +24,7 @@ export interface ProviderSettingsConfig {
  */
 export const createProviderSettings = (
 	containerEl: HTMLElement,
-	plugin: QuizGenerator,
+	plugin: InstanceType<typeof QuizGenerator>,
 	refreshSettings: () => void,
 	config: ProviderSettingsConfig,
 	showAdvanced?: boolean

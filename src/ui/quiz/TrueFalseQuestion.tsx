@@ -5,16 +5,25 @@ import { TrueFalse } from "../../utils/types";
 interface TrueFalseQuestionProps {
 	app: App;
 	question: TrueFalse;
-	onAnswer?: (correct: boolean) => void;
+	onAnswer?: (correct: boolean, userAnswer?: any) => void;
 	onChoose?: () => void;
 	answered?: boolean;
 	onRepeat?: () => void;
 	showRepeat?: boolean;
+	hideResults?: boolean;
+	savedUserAnswer?: any;
 }
 
-const TrueFalseQuestion = ({ app, question, onAnswer, onChoose, answered = false, onRepeat, showRepeat = false }: TrueFalseQuestionProps) => {
-	const [userAnswer, setUserAnswer] = useState<boolean | null>(null);
+const TrueFalseQuestion = ({ app, question, onAnswer, onChoose, answered = false, onRepeat, showRepeat = false, hideResults = false, savedUserAnswer }: TrueFalseQuestionProps) => {
+	const [userAnswer, setUserAnswer] = useState<boolean | null>(savedUserAnswer !== undefined ? savedUserAnswer : null);
 	const [focusedIndex, setFocusedIndex] = useState<number | null>(null); // 0 = true, 1 = false
+	
+	// Update userAnswer when savedUserAnswer changes (e.g., when navigating back to question)
+	useEffect(() => {
+		if (savedUserAnswer !== undefined) {
+			setUserAnswer(savedUserAnswer);
+		}
+	}, [savedUserAnswer]);
 	const questionRef = useRef<HTMLDivElement>(null);
 	const repeatButtonRef = useRef<HTMLAnchorElement | null>(null);
 	const containerRef = useRef<HTMLDivElement>(null);
@@ -77,8 +86,16 @@ const TrueFalseQuestion = ({ app, question, onAnswer, onChoose, answered = false
 		const buttonIndex = buttonAnswer ? 0 : 1;
 		
 		// Add focused class if this button is focused
-		if (focusedIndex === buttonIndex && userAnswer === null && !answered) {
+		const canEdit = hideResults || !answered;
+		if (focusedIndex === buttonIndex && userAnswer === null && canEdit) {
 			baseClass += " focused-choice-qg";
+		}
+		
+		// Don't show correct/incorrect styling if results are hidden
+		if (hideResults) {
+			if (userAnswer === null) return baseClass;
+			if (buttonAnswer === userAnswer) return `${baseClass} selected-choice-qg`;
+			return baseClass;
 		}
 		
 		if (userAnswer === null) return baseClass;
@@ -96,12 +113,16 @@ const TrueFalseQuestion = ({ app, question, onAnswer, onChoose, answered = false
 		}
 		setUserAnswer(answer);
 		setFocusedIndex(null); // Clear focus after selection
-		onAnswer?.(answer === question.answer);
+		onAnswer?.(answer === question.answer, answer);
 	};
+	
+	// Allow editing in review-at-end mode
+	const canEdit = hideResults || !answered;
 
 	// Keyboard navigation handler
 	useEffect(() => {
-		if (answered || userAnswer !== null) return;
+		const canEdit = hideResults || !answered;
+		if (!canEdit) return;
 
 		const handleKeyDown = (event: KeyboardEvent) => {
 			// Don't handle if in an input field
@@ -116,15 +137,15 @@ const TrueFalseQuestion = ({ app, question, onAnswer, onChoose, answered = false
 				return; // Don't handle if another modal is open
 			}
 
-			// Number keys should work globally when the question is visible
-			if (event.key === '1' || event.key === 'Numpad1') {
-				// 1 = True
+			// Number keys and letter keys should work globally when the question is visible
+			if (event.key === '1' || event.key === 'Numpad1' || event.key.toLowerCase() === 't') {
+				// 1 or T = True
 				event.preventDefault();
 				setFocusedIndex(0);
 				handleAnswer(true);
 				return;
-			} else if (event.key === '2' || event.key === 'Numpad2') {
-				// 2 = False
+			} else if (event.key === '2' || event.key === 'Numpad2' || event.key.toLowerCase() === 'f') {
+				// 2 or F = False
 				event.preventDefault();
 				setFocusedIndex(1);
 				handleAnswer(false);
@@ -173,7 +194,7 @@ const TrueFalseQuestion = ({ app, question, onAnswer, onChoose, answered = false
 					ref={trueButtonRef}
 					className={getButtonClass(true)}
 					onClick={() => handleAnswer(true)}
-					disabled={userAnswer !== null || answered}
+					disabled={!canEdit}
 					data-choice-number="1"
 				>
 					True
@@ -182,7 +203,7 @@ const TrueFalseQuestion = ({ app, question, onAnswer, onChoose, answered = false
 					ref={falseButtonRef}
 					className={getButtonClass(false)}
 					onClick={() => handleAnswer(false)}
-					disabled={userAnswer !== null || answered}
+					disabled={!canEdit}
 					data-choice-number="2"
 				>
 					False

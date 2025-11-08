@@ -5,16 +5,33 @@ import { MultipleChoice } from "../../utils/types";
 interface MultipleChoiceQuestionProps {
 	app: App;
 	question: MultipleChoice;
-	onAnswer?: (correct: boolean) => void;
+	onAnswer?: (correct: boolean, userAnswer?: any) => void;
 	onChoose?: () => void;
 	answered?: boolean;
 	onRepeat?: () => void;
 	showRepeat?: boolean;
+	hideResults?: boolean;
+	savedUserAnswer?: any;
 }
 
-const MultipleChoiceQuestion = ({ app, question, onAnswer, onChoose, answered = false, onRepeat, showRepeat = false }: MultipleChoiceQuestionProps) => {
-	const [userAnswer, setUserAnswer] = useState<number | null>(null);
+const MultipleChoiceQuestion = ({ app, question, onAnswer, onChoose, answered = false, onRepeat, showRepeat = false, hideResults = false, savedUserAnswer }: MultipleChoiceQuestionProps) => {
+	// Support both single answer (legacy) and multiple selections (up to 4)
+	const normalizeSavedAnswer = (answer: any): number[] => {
+		if (answer === null || answer === undefined) return [];
+		if (Array.isArray(answer)) return answer;
+		return [answer];
+	};
+	
+	const [userAnswer, setUserAnswer] = useState<number[]>(normalizeSavedAnswer(savedUserAnswer));
 	const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
+	const MAX_SELECTIONS = 4;
+	
+	// Update userAnswer when savedUserAnswer changes (e.g., when navigating back to question)
+	useEffect(() => {
+		if (savedUserAnswer !== undefined) {
+			setUserAnswer(normalizeSavedAnswer(savedUserAnswer));
+		}
+	}, [savedUserAnswer]);
 	const questionRef = useRef<HTMLDivElement>(null);
 	const buttonRefs = useRef<(HTMLButtonElement | null)[]>([]);
 	const repeatButtonRef = useRef<HTMLAnchorElement | null>(null);
@@ -82,13 +99,21 @@ const MultipleChoiceQuestion = ({ app, question, onAnswer, onChoose, answered = 
 		let baseClass = "multiple-choice-button-qg";
 		
 		// Add focused class if this button is focused
-		if (focusedIndex === buttonAnswer && userAnswer === null && !answered) {
+		const canEdit = hideResults || !answered;
+		if (focusedIndex === buttonAnswer && userAnswer.length === 0 && canEdit) {
 			baseClass += " focused-choice-qg";
 		}
 		
-		if (userAnswer === null) return baseClass;
+		// Don't show correct/incorrect styling if results are hidden
+		if (hideResults) {
+			if (userAnswer.length === 0) return baseClass;
+			if (userAnswer.includes(buttonAnswer)) return `${baseClass} selected-choice-qg`;
+			return baseClass;
+		}
+		
+		if (userAnswer.length === 0) return baseClass;
 		const correct = buttonAnswer === question.answer;
-		const selected = buttonAnswer === userAnswer;
+		const selected = userAnswer.includes(buttonAnswer);
 		if (correct && selected) return `${baseClass} correct-choice-qg`;
 		if (correct) return `${baseClass} correct-choice-qg not-selected-qg`;
 		if (selected) return `${baseClass} incorrect-choice-qg`;
@@ -96,17 +121,40 @@ const MultipleChoiceQuestion = ({ app, question, onAnswer, onChoose, answered = 
 	};
 
 	const handleAnswer = (answer: number) => {
-		if (userAnswer === null && onChoose) {
+		if (userAnswer.length === 0 && onChoose) {
 			onChoose(); // Play choose sound on first selection
 		}
-		setUserAnswer(answer);
+		
+		// Toggle selection - allow up to 4 selections
+		let newAnswer: number[];
+		if (userAnswer.includes(answer)) {
+			// Deselect if already selected
+			newAnswer = userAnswer.filter(a => a !== answer);
+		} else {
+			// Add selection if under limit
+			if (userAnswer.length < MAX_SELECTIONS) {
+				newAnswer = [...userAnswer, answer];
+			} else {
+				// At limit, replace oldest selection
+				newAnswer = [...userAnswer.slice(1), answer];
+			}
+		}
+		
+		setUserAnswer(newAnswer);
 		setFocusedIndex(null); // Clear focus after selection
-		onAnswer?.(answer === question.answer);
+		
+		// Mark as correct if the correct answer is among the selections
+		const isCorrect = newAnswer.includes(question.answer);
+		onAnswer?.(isCorrect, newAnswer);
 	};
+	
+	// Allow editing in review-at-end mode
+	const canEdit = hideResults || !answered;
 
 	// Keyboard navigation handler
 	useEffect(() => {
-		if (answered || userAnswer !== null) return;
+		const canEdit = hideResults || !answered;
+		if (!canEdit) return;
 
 		const handleKeyDown = (event: KeyboardEvent) => {
 			// Don't handle if in an input field
@@ -180,7 +228,7 @@ const MultipleChoiceQuestion = ({ app, question, onAnswer, onChoose, answered = 
 						ref={(el) => buttonRefs.current[index] = el}
 						className={getButtonClass(index)}
 						onClick={() => handleAnswer(index)}
-						disabled={userAnswer !== null || answered}
+						disabled={!canEdit}
 						data-choice-number={index + 1}
 					/>
 				))}

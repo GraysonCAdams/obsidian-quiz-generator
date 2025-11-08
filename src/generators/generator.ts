@@ -11,10 +11,16 @@ export default abstract class Generator {
 
 	public abstract shortOrLongAnswerSimilarity(userAnswer: string, answer: string): Promise<number>;
 
+	public abstract generateHint(question: string, answer: string | boolean | number | number[] | string[] | Array<{leftOption: string; rightOption: string}>, sourceContent?: string): Promise<string | null>;
+	
+	public abstract generateQuizTitle(contents: string[], titlePrompt?: string | null): Promise<string | null>;
+
 	protected systemPrompt(): string {
-		const trueFalseFormat = `"question": The question\n"answer": A boolean representing the answer\n`;
+		const trueFalseFormat = `"question": The question (DO NOT include "(True or False)" or similar text in the question - the question type is already known)\n"answer": A boolean representing the answer\n`;
 		const multipleChoiceFormat = `"question": The question\n"options": An array of 4 to 26 strings representing the choices\n` +
-			`"answer": The number corresponding to the index of the correct answer in the options array\n`;
+			`"answer": The number corresponding to the index of the correct answer in the options array\n` +
+			`CRITICAL: DO NOT include "all of the above", "none of the above", "both A and B", "all of these", "none of these", or any similar meta-options in the choices. ` +
+			`Only include substantive answer choices that directly answer the question. Each option must be a standalone, meaningful answer choice.\n`;
 		const selectAllThatApplyFormat = `"question": The question\n"options": An array of 4 to 26 strings representing the choices\n` +
 			`"answer": An array of numbers corresponding to the indexes of the correct answers in the options array\n`;
 		const fillInTheBlankFormat = `"question": The question with 1 to 10 blanks, which must be represented by \`____\` (backticks included). Use one blank per word.\n` +
@@ -44,7 +50,8 @@ export default abstract class Generator {
 			`${this.exampleResponse()}` + (this.settings.language !== "English" ? `\n\n${this.generationLanguage()}` : "") +
 			`\n\nIMPORTANT: Focus your questions on the actual material content, concepts, facts, and ideas presented in the text. ` +
 			`DO NOT ask questions about document structure, formatting, markdown syntax, headings, lists, callouts, or other organizational elements. ` +
-			`Questions should test understanding of the substantive content, not the presentation or structure of the document.`;
+			`Questions should test understanding of the substantive content, not the presentation or structure of the document. ` +
+			`For true or false questions, DO NOT include "(True or False)", "(T/F)", or any similar phrase in the question text itself - the question type is already known from the JSON structure.`;
 	}
 
 	protected userPrompt(contents: string[]): string {
@@ -157,5 +164,51 @@ export default abstract class Generator {
 		return `The generated questions and answers must be in ${this.settings.language}. However, your ` +
 			`response must still follow the JSON format provided above. This means that while the values should ` +
 			`be in ${this.settings.language}, the keys must be the exact same as given above, in English.`;
+	}
+
+	protected formatAnswerForHint(answer: string | boolean | number | number[] | string[] | Array<{leftOption: string; rightOption: string}>): string {
+		if (typeof answer === "boolean") {
+			return answer ? "true" : "false";
+		} else if (typeof answer === "number") {
+			return answer.toString();
+		} else if (Array.isArray(answer)) {
+			if (answer.length > 0 && typeof answer[0] === "object" && "leftOption" in answer[0]) {
+				// Matching question
+				return (answer as Array<{leftOption: string; rightOption: string}>).map((pair) => `${pair.leftOption} → ${pair.rightOption}`).join(", ");
+			} else {
+				// Array of numbers or strings
+				return answer.join(", ");
+			}
+		} else {
+			return answer;
+		}
+	}
+
+	protected createHintPrompt(question: string, answerText: string, sourceContent?: string): string {
+		return `Generate a helpful hint for the following quiz question. The hint should guide the student toward the correct answer without revealing it directly. Be clear, concise, and educational.
+
+Question: ${question}
+Correct Answer: ${answerText}${sourceContent ? `\n\nSource Material:\n${sourceContent.substring(0, 1000)}` : ""}
+
+Provide only the hint text, nothing else.`;
+	}
+
+	protected createTitlePrompt(contents: string[], titlePrompt?: string | null): string {
+		const contentPreview = contents.join("\n\n").substring(0, 2000);
+		if (titlePrompt && titlePrompt.trim()) {
+			return `Generate a concise, descriptive title for a quiz based on the following content. The title should be relevant to the material and follow this guidance: "${titlePrompt}"
+
+Content:
+${contentPreview}
+
+Provide only the title text (no quotes, no "Title:" prefix, just the title itself). Keep it under 60 characters if possible.`;
+		} else {
+			return `Generate a concise, descriptive title for a quiz based on the following content. The title should accurately reflect the main topics, themes, or subject matter covered.
+
+Content:
+${contentPreview}
+
+Provide only the title text (no quotes, no "Title:" prefix, just the title itself). Keep it under 60 characters if possible.`;
+		}
 	}
 }

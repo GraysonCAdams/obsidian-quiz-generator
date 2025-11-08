@@ -1,4 +1,4 @@
-import { Setting, setIcon } from "obsidian";
+import { Notice, Setting, setIcon } from "obsidian";
 import QuizGenerator from "../../main";
 import { QuestionType } from "./generationConfig";
 
@@ -92,7 +92,7 @@ const displayGenerationSettings = (containerEl: HTMLElement, plugin: QuizGenerat
 		if (plugin.settings.surpriseMe) {
 			// In surprise me mode, just adjust the total directly
 			const currentTotal = calculateTotalQuestions();
-			const newTotal = Math.max(0, currentTotal + delta);
+			const newTotal = Math.max(0, Math.min(50, currentTotal + delta)); // Cap at 50
 			
 			// Set all types to 0 initially, then distribute the total randomly
 			plugin.settings.numberOfTrueFalse = 0;
@@ -126,119 +126,138 @@ const displayGenerationSettings = (containerEl: HTMLElement, plugin: QuizGenerat
 			return;
 		}
 		
-		const currentTotal = calculateTotalQuestions();
-		const newTotal = Math.max(0, currentTotal + delta);
+		// Get enabled question types (where quantity > 0)
+		const enabledTypes = getAllQuestionTypes().filter(item => item.current > 0);
+		const numEnabledTypes = enabledTypes.length;
 		
-		if (newTotal === 0) {
-			// Set all to 0
-			plugin.settings.numberOfTrueFalse = 0;
-			plugin.settings.numberOfMultipleChoice = 0;
-			plugin.settings.numberOfSelectAllThatApply = 0;
-			plugin.settings.numberOfFillInTheBlank = 0;
-			plugin.settings.numberOfMatching = 0;
-			plugin.settings.numberOfShortAnswer = 0;
-			plugin.settings.numberOfLongAnswer = 0;
-			plugin.settings.generateTrueFalse = false;
-			plugin.settings.generateMultipleChoice = false;
-			plugin.settings.generateSelectAllThatApply = false;
-			plugin.settings.generateFillInTheBlank = false;
-			plugin.settings.generateMatching = false;
-			plugin.settings.generateShortAnswer = false;
-			plugin.settings.generateLongAnswer = false;
-			await plugin.saveSettings();
-			updateTotalCount();
-			refreshQuestionTypeSettings?.();
-			return;
+		// Always use proportional distribution based on enabled types
+		// If no types are enabled, default to all 7 types set to 1 (even distribution)
+		if (numEnabledTypes === 0) {
+			// When starting from all zeros, set all to 1
+			if (delta > 0) {
+				const allTypes = getAllQuestionTypes();
+				allTypes.forEach(item => {
+					switch (item.type) {
+						case "trueFalse":
+							plugin.settings.numberOfTrueFalse = 1;
+							plugin.settings.generateTrueFalse = true;
+							break;
+						case "multipleChoice":
+							plugin.settings.numberOfMultipleChoice = 1;
+							plugin.settings.generateMultipleChoice = true;
+							break;
+						case "selectAllThatApply":
+							plugin.settings.numberOfSelectAllThatApply = 1;
+							plugin.settings.generateSelectAllThatApply = true;
+							break;
+						case "fillInTheBlank":
+							plugin.settings.numberOfFillInTheBlank = 1;
+							plugin.settings.generateFillInTheBlank = true;
+							break;
+						case "matching":
+							plugin.settings.numberOfMatching = 1;
+							plugin.settings.generateMatching = true;
+							break;
+						case "shortAnswer":
+							plugin.settings.numberOfShortAnswer = 1;
+							plugin.settings.generateShortAnswer = true;
+							break;
+						case "longAnswer":
+							plugin.settings.numberOfLongAnswer = 1;
+							plugin.settings.generateLongAnswer = true;
+							break;
+					}
+				});
+				await plugin.saveSettings();
+				updateTotalCount();
+				refreshQuestionTypeSettings?.();
+				return;
+			} else {
+				// Can't decrease from 0
+				return;
+			}
 		}
 		
-		// Get current total (checking all types, not just enabled ones)
-		const allTypes = getAllQuestionTypes();
-		const currentTotalValue = allTypes.reduce((sum, item) => sum + item.current, 0);
+		// Proportional distribution: increment amount is number of enabled types
+		const incrementAmount = numEnabledTypes;
+		const actualDelta = delta * incrementAmount;
+		const currentTotal = enabledTypes.reduce((sum, item) => sum + item.current, 0);
+		const newTotal = Math.max(0, Math.min(50, currentTotal + actualDelta)); // Cap at 50
 		
-		// If all types are at 0, distribute sequentially (round-robin)
-		// Each type gets incremented to 1 before moving to the next
-		if (currentTotalValue === 0) {
-			// Initialize all to 0
-			plugin.settings.numberOfTrueFalse = 0;
-			plugin.settings.numberOfMultipleChoice = 0;
-			plugin.settings.numberOfSelectAllThatApply = 0;
-			plugin.settings.numberOfFillInTheBlank = 0;
-			plugin.settings.numberOfMatching = 0;
-			plugin.settings.numberOfShortAnswer = 0;
-			plugin.settings.numberOfLongAnswer = 0;
-			
-			// Sequential distribution: increment each type one by one
-			const typeOrder = [
-				"trueFalse",
-				"multipleChoice",
-				"selectAllThatApply",
-				"fillInTheBlank",
-				"matching",
-				"shortAnswer",
-				"longAnswer"
-			];
-			
-			// Distribute sequentially: each type gets 1 before moving to next
-			for (let i = 0; i < newTotal; i++) {
-				const typeIndex = i % typeOrder.length;
-				const type = typeOrder[typeIndex];
-				
-				switch (type) {
+		if (newTotal === 0) {
+			// Set all enabled types to 0
+			enabledTypes.forEach(item => {
+				switch (item.type) {
 					case "trueFalse":
-						plugin.settings.numberOfTrueFalse++;
+						plugin.settings.numberOfTrueFalse = 0;
+						plugin.settings.generateTrueFalse = false;
 						break;
 					case "multipleChoice":
-						plugin.settings.numberOfMultipleChoice++;
+						plugin.settings.numberOfMultipleChoice = 0;
+						plugin.settings.generateMultipleChoice = false;
 						break;
 					case "selectAllThatApply":
-						plugin.settings.numberOfSelectAllThatApply++;
+						plugin.settings.numberOfSelectAllThatApply = 0;
+						plugin.settings.generateSelectAllThatApply = false;
 						break;
 					case "fillInTheBlank":
-						plugin.settings.numberOfFillInTheBlank++;
+						plugin.settings.numberOfFillInTheBlank = 0;
+						plugin.settings.generateFillInTheBlank = false;
 						break;
 					case "matching":
-						plugin.settings.numberOfMatching++;
+						plugin.settings.numberOfMatching = 0;
+						plugin.settings.generateMatching = false;
 						break;
 					case "shortAnswer":
-						plugin.settings.numberOfShortAnswer++;
+						plugin.settings.numberOfShortAnswer = 0;
+						plugin.settings.generateShortAnswer = false;
 						break;
 					case "longAnswer":
-						plugin.settings.numberOfLongAnswer++;
+						plugin.settings.numberOfLongAnswer = 0;
+						plugin.settings.generateLongAnswer = false;
 						break;
 				}
-			}
-			
-			// Enable all types that have count > 0
-			plugin.settings.generateTrueFalse = plugin.settings.numberOfTrueFalse > 0;
-			plugin.settings.generateMultipleChoice = plugin.settings.numberOfMultipleChoice > 0;
-			plugin.settings.generateSelectAllThatApply = plugin.settings.numberOfSelectAllThatApply > 0;
-			plugin.settings.generateFillInTheBlank = plugin.settings.numberOfFillInTheBlank > 0;
-			plugin.settings.generateMatching = plugin.settings.numberOfMatching > 0;
-			plugin.settings.generateShortAnswer = plugin.settings.numberOfShortAnswer > 0;
-			plugin.settings.generateLongAnswer = plugin.settings.numberOfLongAnswer > 0;
+			});
 		} else {
-			// Speaker group slider logic: apply proportional multiplier to all values
-			// Calculate multiplier (like a master volume control)
-			const multiplier = currentTotalValue > 0 ? newTotal / currentTotalValue : 1;
-			
-			// Store new values with fractional parts for proper rounding
+			// Use actual integer values as ratios (as visually presented)
+			// This maintains the intended proportions based on what the user sees
 			const newValues: Array<{ type: string; value: number; fractional: number }> = [];
 			let totalRounded = 0;
 			
-			// Apply multiplier to each type and round down
-			allTypes.forEach(item => {
-				const scaledValue = item.current * multiplier;
-				const roundedValue = Math.max(0, Math.floor(scaledValue));
-				const fractional = scaledValue - roundedValue;
+			// Calculate the sum of current integer values to use as the ratio base
+			const currentSum = enabledTypes.reduce((sum, item) => sum + item.current, 0);
+			
+			if (currentSum === 0) {
+				// If all are 0, distribute evenly
+				const perType = Math.floor(newTotal / enabledTypes.length);
+				const remainder = newTotal % enabledTypes.length;
 				
-				newValues.push({
-					type: item.type,
-					value: roundedValue,
-					fractional: fractional
+				enabledTypes.forEach((item, index) => {
+					const value = perType + (index < remainder ? 1 : 0);
+					newValues.push({
+						type: item.type,
+						value: value,
+						fractional: 0
+					});
 				});
-				
-				totalRounded += roundedValue;
-			});
+			} else {
+				// Calculate target values based on current integer values as ratios
+				enabledTypes.forEach(item => {
+					// Use current integer value as the ratio part
+					// Example: if types are 2, 5, 3, use 2:5:3 ratio
+					const targetValue = (newTotal * item.current) / currentSum;
+					const roundedValue = Math.max(0, Math.floor(targetValue));
+					const fractional = targetValue - roundedValue;
+					
+					newValues.push({
+						type: item.type,
+						value: roundedValue,
+						fractional: fractional
+					});
+					
+					totalRounded += roundedValue;
+				});
+			}
 			
 			// Distribute remainder to ensure exact total
 			let remainder = newTotal - totalRounded;
@@ -259,7 +278,7 @@ const displayGenerationSettings = (containerEl: HTMLElement, plugin: QuizGenerat
 				}
 			}
 			
-			// Apply new values
+			// Apply new values (only to enabled types)
 			newValues.forEach(item => {
 				switch (item.type) {
 					case "trueFalse":
@@ -297,6 +316,7 @@ const displayGenerationSettings = (containerEl: HTMLElement, plugin: QuizGenerat
 		await plugin.saveSettings();
 		updateTotalCount();
 		refreshQuestionTypeSettings?.();
+		refreshDistributionChart?.();
 	};
 
 	// Total question count display (at top with +/- buttons)
@@ -307,37 +327,78 @@ const displayGenerationSettings = (containerEl: HTMLElement, plugin: QuizGenerat
 	const updateTotalCount = (): void => {
 		totalCountContainer.empty();
 		
-		const totalContainer = totalCountContainer.createDiv();
+		const totalContainer = totalCountContainer.createDiv("total-display-enhanced-qg");
 		totalContainer.style.display = "flex";
-		totalContainer.style.alignItems = "center";
-		totalContainer.style.gap = "0.5em";
-		totalContainer.style.justifyContent = "center";
+		totalContainer.style.flexDirection = "column";
+		totalContainer.style.gap = "0.75em";
+		totalContainer.style.padding = "1em";
+		totalContainer.style.background = "var(--background-secondary)";
+		totalContainer.style.borderRadius = "8px";
+		totalContainer.style.border = "1px solid var(--background-modifier-border)";
+		
+		// Top row: Total text and buttons
+		const topRow = totalContainer.createDiv();
+		topRow.style.display = "flex";
+		topRow.style.alignItems = "center";
+		topRow.style.justifyContent = "center";
+		topRow.style.gap = "0.75em";
 		
 		// Minus button
-		const minusBtn = totalContainer.createEl("button", { cls: "clickable-icon" });
+		const minusBtn = topRow.createEl("button", { cls: "clickable-icon" });
 		setIcon(minusBtn, "minus");
-		minusBtn.style.padding = "0.25em";
+		minusBtn.style.padding = "0.5em";
+		minusBtn.style.fontSize = "1.2em";
 		minusBtn.title = "Decrease total questions proportionally";
 		minusBtn.addEventListener("click", async () => {
 			await adjustProportionally(-1);
 		});
 		
 		// Total display
-		const totalText = totalContainer.createDiv("total-question-count-text-qg");
-		const total = calculateTotalQuestions();
-		totalText.textContent = `Total questions per quiz: ${total}`;
-		totalText.style.fontWeight = "600";
-		totalText.style.fontSize = "1.1em";
+		const totalText = topRow.createDiv("total-question-count-text-qg");
+		const currentTotal = calculateTotalQuestions();
+		totalText.textContent = `Total: ${currentTotal} / 50`;
+		totalText.style.fontWeight = "700";
+		totalText.style.fontSize = "1.3em";
 		totalText.style.color = "var(--text-normal)";
 		
 		// Plus button
-		const plusBtn = totalContainer.createEl("button", { cls: "clickable-icon" });
+		const plusBtn = topRow.createEl("button", { cls: "clickable-icon" });
 		setIcon(plusBtn, "plus");
-		plusBtn.style.padding = "0.25em";
-		plusBtn.title = "Increase total questions proportionally";
+		plusBtn.style.padding = "0.5em";
+		plusBtn.style.fontSize = "1.2em";
+		plusBtn.title = currentTotal >= 50 ? "Maximum of 50 questions reached" : "Increase total questions proportionally";
+		if (currentTotal >= 50) {
+			plusBtn.disabled = true;
+			plusBtn.style.opacity = "0.4";
+			plusBtn.style.cursor = "not-allowed";
+		}
 		plusBtn.addEventListener("click", async () => {
-			await adjustProportionally(1);
+			if (currentTotal < 50) {
+				await adjustProportionally(1);
+			} else {
+				new Notice("Maximum of 50 questions reached");
+			}
 		});
+		
+		// Progress bar
+		const progressBarContainer = totalContainer.createDiv();
+		progressBarContainer.style.width = "100%";
+		progressBarContainer.style.height = "8px";
+		progressBarContainer.style.background = "var(--background-modifier-border)";
+		progressBarContainer.style.borderRadius = "4px";
+		progressBarContainer.style.overflow = "hidden";
+		progressBarContainer.style.position = "relative";
+		
+		const progressBar = progressBarContainer.createDiv();
+		const percentage = (currentTotal / 50) * 100;
+		progressBar.style.width = `${percentage}%`;
+		progressBar.style.height = "100%";
+		progressBar.style.background = currentTotal >= 50 
+			? "var(--text-error)" 
+			: currentTotal >= 40 
+				? "var(--text-warning)" 
+				: "var(--text-accent)";
+		progressBar.style.transition = "width 0.3s ease, background-color 0.3s ease";
 	};
 	
 	// Initial ratios update
@@ -347,7 +408,7 @@ const displayGenerationSettings = (containerEl: HTMLElement, plugin: QuizGenerat
 		// Surprise me toggle
 		const surpriseMeSetting = new Setting(generationSection)
 			.setName("Surprise me")
-			.setDesc("Randomize question type distribution. Individual question type counters will be hidden and order controls disabled when enabled.")
+			.setDesc("Randomize question type distribution. Individual question type controls will be hidden when enabled.")
 		.addToggle(toggle =>
 			toggle
 					.setValue(plugin.settings.surpriseMe)
@@ -356,34 +417,74 @@ const displayGenerationSettings = (containerEl: HTMLElement, plugin: QuizGenerat
 					await plugin.saveSettings();
 						refreshQuestionTypeSettings?.();
 						refreshQuestionTypeOrderUI?.();
+						refreshDistributionChart?.();
 						updateTotalCount();
 					})
 			);
 		surpriseMeSetting.settingEl.style.gridColumn = "1 / -1"; // Span both columns
 	
-	// Question type settings container (will be hidden when surprise me is enabled)
-	const questionTypesContainer = generationSection.createDiv("question-types-container-qg");
-	questionTypesContainer.style.gridColumn = "1 / -1"; // Span both columns
+	// Split-view container for question types and distribution
+	const splitViewContainer = generationSection.createDiv("question-types-split-view-qg");
+	splitViewContainer.style.display = "grid";
+	splitViewContainer.style.gridTemplateColumns = "1fr 1fr";
+	splitViewContainer.style.gap = "2em";
+	splitViewContainer.style.gridColumn = "1 / -1";
+	splitViewContainer.style.marginTop = "1em";
+	
+	// Left panel: Question type controls
+	const questionTypesLeftPanel = splitViewContainer.createDiv("question-types-left-panel-qg");
+	
+	// Right panel: Distribution visualization
+	const questionTypesRightPanel = splitViewContainer.createDiv("question-types-right-panel-qg");
+	
+	// Question type settings container (inside left panel)
+	const questionTypesContainer = questionTypesLeftPanel.createDiv("question-types-container-qg");
 	
 	let refreshQuestionTypeSettings: (() => void) | null = null;
+	let refreshDistributionChart: (() => void) | null = null;
 
-	const createQuestionTypeSetting = (name: string, iconName: string, quantity: number, onQuantityChange: (value: number) => Promise<void>, container: HTMLElement, hideCounters: boolean = false): void => {
+	const createQuestionTypeSetting = (
+		name: string, 
+		iconName: string, 
+		quantity: number, 
+		isEnabled: boolean,
+		onQuantityChange: (value: number) => Promise<void>,
+		onEnabledChange: (enabled: boolean) => Promise<void>,
+		container: HTMLElement, 
+		hideCounters: boolean = false
+	): void => {
 		const setting = new Setting(container);
+		setting.settingEl.classList.add("question-type-row-qg");
 		
-		// Clear default name and create custom name container with icon
+		// Clear default name and create custom name container with checkbox, icon, and name
 		setting.nameEl.empty();
 		const nameContainer = setting.nameEl.createDiv("question-type-name-container-qg");
 		nameContainer.style.display = "flex";
 		nameContainer.style.alignItems = "center";
 		nameContainer.style.gap = "0.5em";
 		
+		// Add checkbox for enable/disable
+		const checkbox = nameContainer.createEl("input", { type: "checkbox", cls: "question-type-checkbox-qg" });
+		checkbox.checked = isEnabled;
+		const checkboxRef = checkbox; // Store reference for updates
+		checkbox.addEventListener("change", async (e) => {
+			const checked = (e.target as HTMLInputElement).checked;
+			await onEnabledChange(checked);
+			if (!checked) {
+				// When disabling, set quantity to 0
+				await onQuantityChange(0);
+			}
+		});
+		
 		// Add icon
 		const iconEl = nameContainer.createDiv("question-type-icon-qg");
 		setIcon(iconEl, iconName);
+		iconEl.style.opacity = isEnabled ? "1" : "0.5";
 		
 		// Add name text
 		const nameTextEl = nameContainer.createSpan();
 		nameTextEl.textContent = name;
+		nameTextEl.style.opacity = isEnabled ? "1" : "0.7";
 		
 		// Create slider container
 		const controlContainer = setting.controlEl.createDiv("question-type-control-qg");
@@ -393,21 +494,75 @@ const displayGenerationSettings = (containerEl: HTMLElement, plugin: QuizGenerat
 		
 		// Value display (declare before slider so it can be used in onChange)
 		let valueDisplay: HTMLDivElement | null = null;
+		let countInput: HTMLInputElement | null = null;
 		
-		// Value display with +/- buttons (only show if not hiding counters)
+		// Value display with direct input and +/- buttons (only show if not hiding counters)
 		if (!hideCounters) {
 			const valueContainer = controlContainer.createDiv();
 			valueContainer.style.display = "flex";
 			valueContainer.style.alignItems = "center";
 			valueContainer.style.gap = "0.25em";
 			
-			// Value display
+			// Direct number input field
+			countInput = valueContainer.createEl("input", { type: "number", cls: "count-input-qg" });
+			countInput.value = quantity.toString();
+			countInput.min = "0";
+			countInput.max = "50";
+			countInput.style.width = "3em";
+			countInput.style.textAlign = "center";
+			countInput.style.padding = "0.25em";
+			countInput.style.border = "1px solid var(--background-modifier-border)";
+			countInput.style.borderRadius = "4px";
+			countInput.style.background = "var(--background-primary)";
+			countInput.disabled = !isEnabled;
+			
+			countInput.addEventListener("change", async (e) => {
+				const inputValue = parseInt((e.target as HTMLInputElement).value) || 0;
+				const currentTotal = calculateTotalQuestions();
+				const currentValue = quantity;
+				const newTotal = currentTotal - currentValue + inputValue;
+				
+				if (newTotal > 50) {
+					const maxAllowed = 50 - (currentTotal - currentValue);
+					const finalValue = Math.max(0, Math.min(maxAllowed, inputValue));
+					countInput!.value = finalValue.toString();
+					if (sliderComponent) {
+						sliderComponent.setValue(finalValue);
+					}
+					new Notice("Maximum of 50 total questions reached");
+					await onQuantityChange(finalValue);
+					// Update checkbox if value > 0
+					if (checkboxRef && finalValue > 0 && !checkboxRef.checked) {
+						checkboxRef.checked = true;
+						await onEnabledChange(true);
+					}
+				} else {
+					if (sliderComponent) {
+						sliderComponent.setValue(inputValue);
+					}
+					await onQuantityChange(inputValue);
+					// Update checkbox if value > 0
+					if (checkboxRef && inputValue > 0 && !checkboxRef.checked) {
+						checkboxRef.checked = true;
+						await onEnabledChange(true);
+					} else if (checkboxRef && inputValue === 0 && checkboxRef.checked) {
+						checkboxRef.checked = false;
+						await onEnabledChange(false);
+					}
+				}
+				updateTotalCount();
+				refreshQuestionTypeOrderUI?.();
+				refreshDistributionChart?.();
+			});
+			
+			// Value display (for visual feedback, can be hidden if using input)
 			valueDisplay = valueContainer.createDiv();
 			valueDisplay.textContent = quantity.toString();
 			valueDisplay.style.minWidth = "2em";
 			valueDisplay.style.textAlign = "center";
 			valueDisplay.style.fontWeight = "500";
 			valueDisplay.style.color = "var(--text-muted)";
+			valueDisplay.style.display = "none"; // Hide since we have direct input
 			
 			// Minus button
 			const minusBtn = valueContainer.createEl("button", { cls: "clickable-icon" });
@@ -416,14 +571,23 @@ const displayGenerationSettings = (containerEl: HTMLElement, plugin: QuizGenerat
 			minusBtn.title = "Decrease quantity";
 			minusBtn.addEventListener("click", async (e) => {
 				e.stopPropagation();
-				const currentValue = parseInt(valueDisplay!.textContent || "0");
-				if (currentValue > 0 && sliderComponent) {
+				const currentValue = parseInt(countInput?.value || "0");
+				if (currentValue > 0 && sliderComponent && countInput) {
 					const newValue = currentValue - 1;
 					sliderComponent.setValue(newValue);
-					valueDisplay!.textContent = newValue.toString();
-					await onQuantityChange(newValue);
-					updateTotalCount();
-					refreshQuestionTypeOrderUI?.();
+					countInput.value = newValue.toString();
+				await onQuantityChange(newValue);
+				// Update checkbox if value > 0
+				if (checkboxRef && newValue > 0 && !checkboxRef.checked) {
+					checkboxRef.checked = true;
+					await onEnabledChange(true);
+				} else if (checkboxRef && newValue === 0 && checkboxRef.checked) {
+					checkboxRef.checked = false;
+					await onEnabledChange(false);
+				}
+				updateTotalCount();
+				refreshQuestionTypeOrderUI?.();
+				refreshDistributionChart?.();
 				}
 			});
 			
@@ -434,14 +598,26 @@ const displayGenerationSettings = (containerEl: HTMLElement, plugin: QuizGenerat
 			plusBtn.title = "Increase quantity";
 			plusBtn.addEventListener("click", async (e) => {
 				e.stopPropagation();
-				const currentValue = parseInt(valueDisplay!.textContent || "0");
-				if (currentValue < 20 && sliderComponent) {
+				const currentValue = parseInt(countInput?.value || "0");
+				const currentTotal = calculateTotalQuestions();
+				const maxAllowed = 50 - (currentTotal - currentValue); // No per-type max, just 50 total
+				
+				if (currentValue < maxAllowed && sliderComponent && maxAllowed > 0 && countInput) {
 					const newValue = currentValue + 1;
 					sliderComponent.setValue(newValue);
-					valueDisplay!.textContent = newValue.toString();
+					countInput.value = newValue.toString();
 					await onQuantityChange(newValue);
+					// Update checkbox if value > 0
+					if (checkboxRef && newValue > 0 && !checkboxRef.checked) {
+						checkboxRef.checked = true;
+						await onEnabledChange(true);
+					}
 					updateTotalCount();
 					refreshQuestionTypeOrderUI?.();
+					refreshDistributionChart?.();
+				} else if (maxAllowed <= 0) {
+					// Show warning when trying to exceed 50
+					new Notice("Maximum of 50 total questions reached");
 				}
 			});
 		}
@@ -450,16 +626,49 @@ const displayGenerationSettings = (containerEl: HTMLElement, plugin: QuizGenerat
 		let sliderComponent: any = null;
 		setting.addSlider(sliderEl => {
 			sliderEl.setValue(quantity);
-			sliderEl.setLimits(0, 20, 1);
+			sliderEl.setLimits(0, 50, 1); // No per-type max, just 50 total limit
 			sliderComponent = sliderEl;
 			sliderEl.onChange(async (value) => {
-				if (!hideCounters && valueDisplay) {
-					valueDisplay.textContent = value.toString();
+				// Check if adjusting this slider would exceed 50 total questions
+				const currentTotal = calculateTotalQuestions();
+				const currentValue = quantity;
+				const newTotal = currentTotal - currentValue + value;
+				
+				if (newTotal > 50) {
+					// Cap the value to prevent exceeding 50
+					const maxAllowed = 50 - (currentTotal - currentValue);
+					value = Math.max(0, Math.min(maxAllowed, value));
+					sliderEl.setValue(value);
+					if (!hideCounters && countInput) {
+						countInput.value = value.toString();
+					}
+				} else if (!hideCounters && countInput) {
+					countInput.value = value.toString();
 				}
+				
 				await onQuantityChange(value);
+				// Update checkbox if value > 0
+				if (checkboxRef && value > 0 && !checkboxRef.checked) {
+					checkboxRef.checked = true;
+					await onEnabledChange(true);
+				} else if (checkboxRef && value === 0 && checkboxRef.checked) {
+					checkboxRef.checked = false;
+					await onEnabledChange(false);
+				}
 				updateTotalCount();
 				refreshQuestionTypeOrderUI?.();
+				refreshDistributionChart?.();
 			});
+			
+			// Disable slider and input when type is disabled
+			if (!isEnabled) {
+				sliderEl.sliderEl.disabled = true;
+				sliderEl.sliderEl.style.opacity = "0.5";
+				sliderEl.sliderEl.style.cursor = "not-allowed";
+				if (countInput) {
+					countInput.disabled = true;
+				}
+			}
 			// Disable slider when surprise me is enabled
 			if (hideCounters) {
 				sliderEl.sliderEl.disabled = true;
@@ -471,6 +680,148 @@ const displayGenerationSettings = (containerEl: HTMLElement, plugin: QuizGenerat
 		});
 	};
 
+	// Function to create distribution chart
+	const createDistributionChart = (): void => {
+		questionTypesRightPanel.empty();
+		
+		if (plugin.settings.surpriseMe) {
+			const infoText = questionTypesRightPanel.createDiv();
+			infoText.textContent = "Distribution visualization is disabled in 'Surprise me' mode.";
+			infoText.style.color = "var(--text-muted)";
+			infoText.style.fontSize = "0.9em";
+			infoText.style.padding = "1em";
+			return;
+		}
+		
+		const chartContainer = questionTypesRightPanel.createDiv("distribution-chart-qg");
+		chartContainer.style.padding = "1em";
+		chartContainer.style.background = "var(--background-secondary)";
+		chartContainer.style.borderRadius = "8px";
+		chartContainer.style.border = "1px solid var(--background-modifier-border)";
+		
+		const heading = chartContainer.createEl("h3", { text: "Distribution" });
+		heading.style.marginTop = "0";
+		heading.style.marginBottom = "1em";
+		heading.style.fontSize = "1.1em";
+		heading.style.fontWeight = "600";
+		
+		const allTypes = getAllQuestionTypes();
+		const enabledTypes = allTypes.filter(item => item.current > 0);
+		const currentTotal = calculateTotalQuestions();
+		
+		if (currentTotal === 0) {
+			const emptyText = chartContainer.createDiv();
+			emptyText.textContent = "No questions configured. Enable question types to see distribution.";
+			emptyText.style.color = "var(--text-muted)";
+			emptyText.style.fontSize = "0.9em";
+			return;
+		}
+		
+		// Stacked bar chart
+		const barContainer = chartContainer.createDiv();
+		barContainer.style.width = "100%";
+		barContainer.style.height = "200px";
+		barContainer.style.display = "flex";
+		barContainer.style.flexDirection = "row";
+		barContainer.style.border = "1px solid var(--background-modifier-border)";
+		barContainer.style.borderRadius = "4px";
+		barContainer.style.overflow = "hidden";
+		barContainer.style.marginBottom = "1em";
+		
+		// Color palette for question types
+		const typeColors: Record<string, string> = {
+			"trueFalse": "#4a90e2",
+			"multipleChoice": "#50c878",
+			"selectAllThatApply": "#f39c12",
+			"fillInTheBlank": "#e74c3c",
+			"matching": "#9b59b6",
+			"shortAnswer": "#1abc9c",
+			"longAnswer": "#34495e"
+		};
+		
+		// Create segments
+		enabledTypes.forEach((item, index) => {
+			const percentage = (item.current / currentTotal) * 100;
+			const segment = barContainer.createDiv("distribution-segment-qg");
+			segment.style.width = `${percentage}%`;
+			segment.style.height = "100%";
+			segment.style.background = typeColors[item.type] || "var(--text-muted)";
+			segment.style.position = "relative";
+			segment.style.cursor = "pointer";
+			segment.style.transition = "opacity 0.2s ease";
+			
+			// Add hover effect
+			segment.addEventListener("mouseenter", () => {
+				segment.style.opacity = "0.8";
+			});
+			segment.addEventListener("mouseleave", () => {
+				segment.style.opacity = "1";
+			});
+			
+			// Tooltip on hover
+			const typeLabels: Record<string, string> = {
+				"trueFalse": "True or False",
+				"multipleChoice": "Multiple Choice",
+				"selectAllThatApply": "Select All That Apply",
+				"fillInTheBlank": "Fill in the Blank",
+				"matching": "Matching",
+				"shortAnswer": "Short Answer",
+				"longAnswer": "Long Answer"
+			};
+			
+			segment.title = `${typeLabels[item.type]}: ${item.current} (${percentage.toFixed(1)}%)`;
+		});
+		
+		// List of types with percentages
+		const typeList = chartContainer.createDiv();
+		typeList.style.display = "flex";
+		typeList.style.flexDirection = "column";
+		typeList.style.gap = "0.5em";
+		
+		enabledTypes.forEach(item => {
+			const percentage = (item.current / currentTotal) * 100;
+			const typeRow = typeList.createDiv();
+			typeRow.style.display = "flex";
+			typeRow.style.alignItems = "center";
+			typeRow.style.gap = "0.5em";
+			typeRow.style.padding = "0.25em 0";
+			
+			const colorIndicator = typeRow.createDiv();
+			colorIndicator.style.width = "12px";
+			colorIndicator.style.height = "12px";
+			colorIndicator.style.borderRadius = "2px";
+			colorIndicator.style.background = typeColors[item.type] || "var(--text-muted)";
+			
+			const typeLabels: Record<string, string> = {
+				"trueFalse": "True or False",
+				"multipleChoice": "Multiple Choice",
+				"selectAllThatApply": "Select All That Apply",
+				"fillInTheBlank": "Fill in the Blank",
+				"matching": "Matching",
+				"shortAnswer": "Short Answer",
+				"longAnswer": "Long Answer"
+			};
+			
+			const label = typeRow.createSpan();
+			label.textContent = typeLabels[item.type] || item.type;
+			label.style.flex = "1";
+			label.style.fontSize = "0.9em";
+			
+			const count = typeRow.createSpan();
+			count.textContent = `${item.current}`;
+			count.style.fontWeight = "600";
+			count.style.minWidth = "2em";
+			count.style.textAlign = "right";
+			
+			const percent = typeRow.createSpan();
+			percent.textContent = `${percentage.toFixed(1)}%`;
+			percent.style.minWidth = "3.5em";
+			percent.style.textAlign = "right";
+			percent.style.color = "var(--text-muted)";
+			percent.style.fontSize = "0.85em";
+		});
+	};
+	
 	// Function to refresh question type settings visibility
 	const refreshQuestionTypeSettingsFn = (): void => {
 		questionTypesContainer.empty();
@@ -479,16 +830,35 @@ const displayGenerationSettings = (containerEl: HTMLElement, plugin: QuizGenerat
 		questionTypesContainer.style.display = "block";
 		const hideCounters = plugin.settings.surpriseMe;
 		
+		// Hide/show split view based on surprise me
+		if (plugin.settings.surpriseMe) {
+			splitViewContainer.style.display = "none";
+		} else {
+			splitViewContainer.style.display = "grid";
+		}
+		
 		createQuestionTypeSetting(
 			"True or false",
 			"toggle-left",
 			plugin.settings.numberOfTrueFalse,
+			plugin.settings.generateTrueFalse,
 			async (value) => {
 				plugin.settings.numberOfTrueFalse = value;
 				plugin.settings.generateTrueFalse = value > 0;
 				updateRatiosFromCurrent();
 				await plugin.saveSettings();
 				updateTotalCount();
+				refreshDistributionChart?.();
+			},
+			async (enabled) => {
+				plugin.settings.generateTrueFalse = enabled;
+				if (!enabled) {
+					plugin.settings.numberOfTrueFalse = 0;
+				}
+				updateRatiosFromCurrent();
+				await plugin.saveSettings();
+				updateTotalCount();
+				refreshDistributionChart?.();
 			},
 			questionTypesContainer,
 			hideCounters
@@ -498,12 +868,24 @@ const displayGenerationSettings = (containerEl: HTMLElement, plugin: QuizGenerat
 			"Multiple choice",
 			"circle-dot",
 			plugin.settings.numberOfMultipleChoice,
+			plugin.settings.generateMultipleChoice,
 			async (value) => {
 				plugin.settings.numberOfMultipleChoice = value;
 				plugin.settings.generateMultipleChoice = value > 0;
 				updateRatiosFromCurrent();
 				await plugin.saveSettings();
 				updateTotalCount();
+				refreshDistributionChart?.();
+			},
+			async (enabled) => {
+				plugin.settings.generateMultipleChoice = enabled;
+				if (!enabled) {
+					plugin.settings.numberOfMultipleChoice = 0;
+				}
+				updateRatiosFromCurrent();
+				await plugin.saveSettings();
+				updateTotalCount();
+				refreshDistributionChart?.();
 			},
 			questionTypesContainer,
 			hideCounters
@@ -513,12 +895,24 @@ const displayGenerationSettings = (containerEl: HTMLElement, plugin: QuizGenerat
 			"Select all that apply",
 			"check-square",
 			plugin.settings.numberOfSelectAllThatApply,
+			plugin.settings.generateSelectAllThatApply,
 			async (value) => {
 				plugin.settings.numberOfSelectAllThatApply = value;
 				plugin.settings.generateSelectAllThatApply = value > 0;
 				updateRatiosFromCurrent();
 				await plugin.saveSettings();
 				updateTotalCount();
+				refreshDistributionChart?.();
+			},
+			async (enabled) => {
+				plugin.settings.generateSelectAllThatApply = enabled;
+				if (!enabled) {
+					plugin.settings.numberOfSelectAllThatApply = 0;
+				}
+				updateRatiosFromCurrent();
+				await plugin.saveSettings();
+				updateTotalCount();
+				refreshDistributionChart?.();
 			},
 			questionTypesContainer,
 			hideCounters
@@ -528,12 +922,24 @@ const displayGenerationSettings = (containerEl: HTMLElement, plugin: QuizGenerat
 			"Fill in the blank",
 			"minus",
 			plugin.settings.numberOfFillInTheBlank,
+			plugin.settings.generateFillInTheBlank,
 			async (value) => {
 				plugin.settings.numberOfFillInTheBlank = value;
 				plugin.settings.generateFillInTheBlank = value > 0;
 				updateRatiosFromCurrent();
 				await plugin.saveSettings();
 				updateTotalCount();
+				refreshDistributionChart?.();
+			},
+			async (enabled) => {
+				plugin.settings.generateFillInTheBlank = enabled;
+				if (!enabled) {
+					plugin.settings.numberOfFillInTheBlank = 0;
+				}
+				updateRatiosFromCurrent();
+				await plugin.saveSettings();
+				updateTotalCount();
+				refreshDistributionChart?.();
 			},
 			questionTypesContainer,
 			hideCounters
@@ -543,12 +949,24 @@ const displayGenerationSettings = (containerEl: HTMLElement, plugin: QuizGenerat
 			"Matching",
 			"link-2",
 			plugin.settings.numberOfMatching,
+			plugin.settings.generateMatching,
 			async (value) => {
 				plugin.settings.numberOfMatching = value;
 				plugin.settings.generateMatching = value > 0;
 				updateRatiosFromCurrent();
 				await plugin.saveSettings();
 				updateTotalCount();
+				refreshDistributionChart?.();
+			},
+			async (enabled) => {
+				plugin.settings.generateMatching = enabled;
+				if (!enabled) {
+					plugin.settings.numberOfMatching = 0;
+				}
+				updateRatiosFromCurrent();
+				await plugin.saveSettings();
+				updateTotalCount();
+				refreshDistributionChart?.();
 			},
 			questionTypesContainer,
 			hideCounters
@@ -558,12 +976,24 @@ const displayGenerationSettings = (containerEl: HTMLElement, plugin: QuizGenerat
 			"Short answer",
 			"message-square",
 			plugin.settings.numberOfShortAnswer,
+			plugin.settings.generateShortAnswer,
 			async (value) => {
 				plugin.settings.numberOfShortAnswer = value;
 				plugin.settings.generateShortAnswer = value > 0;
 				updateRatiosFromCurrent();
 				await plugin.saveSettings();
 				updateTotalCount();
+				refreshDistributionChart?.();
+			},
+			async (enabled) => {
+				plugin.settings.generateShortAnswer = enabled;
+				if (!enabled) {
+					plugin.settings.numberOfShortAnswer = 0;
+				}
+				updateRatiosFromCurrent();
+				await plugin.saveSettings();
+				updateTotalCount();
+				refreshDistributionChart?.();
 			},
 			questionTypesContainer,
 			hideCounters
@@ -573,20 +1003,40 @@ const displayGenerationSettings = (containerEl: HTMLElement, plugin: QuizGenerat
 			"Long answer",
 			"file-text",
 			plugin.settings.numberOfLongAnswer,
+			plugin.settings.generateLongAnswer,
 			async (value) => {
 				plugin.settings.numberOfLongAnswer = value;
 				plugin.settings.generateLongAnswer = value > 0;
 				updateRatiosFromCurrent();
 				await plugin.saveSettings();
 				updateTotalCount();
+				refreshDistributionChart?.();
+			},
+			async (enabled) => {
+				plugin.settings.generateLongAnswer = enabled;
+				if (!enabled) {
+					plugin.settings.numberOfLongAnswer = 0;
+				}
+				updateRatiosFromCurrent();
+				await plugin.saveSettings();
+				updateTotalCount();
+				refreshDistributionChart?.();
 			},
 			questionTypesContainer,
 			hideCounters
 		);
+		
+		// Refresh distribution chart
+		if (refreshDistributionChart) {
+			refreshDistributionChart();
+		}
 	};
 	
 	refreshQuestionTypeSettings = refreshQuestionTypeSettingsFn;
+	refreshDistributionChart = createDistributionChart;
+	
 	refreshQuestionTypeSettings();
+	refreshDistributionChart();
 
 	// Question Type Order Settings
 	const questionTypeOrderHeading = new Setting(generationSection).setName("Question Type Order").setHeading();

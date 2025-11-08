@@ -22,7 +22,11 @@ interface QuizModalWrapperProps {
 }
 
 const QuizModalWrapper = ({ app, settings, quiz, quizSaver, reviewing, hasBeenTaken, previousAttempts, questionWrongCounts, plugin, handleClose, onQuizComplete, existingQuizFile, contentSelectionMode }: QuizModalWrapperProps) => {
+	// Force re-render when pagination setting changes
+	const paginationKey = settings.gamification?.paginationEnabled ? 'pagination-on' : 'pagination-off';
+	
 	return <QuizModal
+		key={paginationKey}
 		app={app}
 		settings={settings}
 		quiz={quiz}

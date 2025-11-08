@@ -10,15 +10,18 @@ import {
 	TrueFalse
 } from "../utils/types";
 import QuizModalLogic from "../ui/quiz/quizModalLogic";
+import type QuizGenerator from "../main";
 
 export default class QuizReviewer {
 	private readonly app: App;
 	private readonly settings: QuizSettings;
+	private readonly plugin?: QuizGenerator;
 	private readonly quiz: Question[] = [];
 
-	constructor(app: App, settings: QuizSettings) {
+	constructor(app: App, settings: QuizSettings, plugin?: QuizGenerator) {
 		this.app = app;
 		this.settings = settings;
+		this.plugin = plugin;
 	}
 
 	/**
@@ -48,7 +51,7 @@ export default class QuizReviewer {
 
 		if (this.quiz.length > 0) {
 			// Pass the file so results can be saved back to it
-			await new QuizModalLogic(this.app, this.settings, this.quiz, [], file).renderQuiz();
+			await new QuizModalLogic(this.app, this.settings, this.quiz, [], file, undefined, undefined, this.plugin).renderQuiz();
 		} else {
 			new Notice("No questions in this note");
 		}

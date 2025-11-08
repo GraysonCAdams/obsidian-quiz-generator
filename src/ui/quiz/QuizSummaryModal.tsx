@@ -1,7 +1,9 @@
-import { App, Modal, Notice } from "obsidian";
+import { App, Modal, Notice, TFile, getFrontMatterInfo, setIcon } from "obsidian";
 import { QuizSettings } from "../../settings/config";
-import { QuizResult } from "../../utils/types";
+import { QuizResult, Question } from "../../utils/types";
 import { StreakData } from "../../services/streakTracker";
+import type QuizGenerator from "../../main";
+import ReviewModal from "./ReviewModal";
 
 export default class QuizSummaryModal extends Modal {
 	private readonly settings: QuizSettings;
@@ -10,7 +12,13 @@ export default class QuizSummaryModal extends Modal {
 	private readonly streakData: StreakData;
 	private readonly correctStreak: number;
 	private readonly onCloseCallback: () => void;
-	private currentRating: number = 0;
+	private readonly plugin?: QuizGenerator;
+	private readonly failureReason?: string;
+	private readonly currentRating: number;
+	private readonly existingQuizFile?: TFile;
+	private readonly totalQuestions: number;
+	private readonly quiz?: Question[];
+	private readonly userAnswers?: Map<number, any>;
 
 	constructor(
 		app: App,
@@ -19,7 +27,12 @@ export default class QuizSummaryModal extends Modal {
 		elapsedTime: number,
 		streakData: StreakData,
 		correctStreak: number,
-		onCloseCallback: () => void
+		onCloseCallback: () => void,
+		failureReason?: string,
+		plugin?: QuizGenerator,
+		existingQuizFile?: TFile,
+		quiz?: Question[],
+		userAnswers?: Map<number, any>
 	) {
 		super(app);
 		this.settings = settings;
@@ -28,31 +41,49 @@ export default class QuizSummaryModal extends Modal {
 		this.streakData = streakData;
 		this.correctStreak = correctStreak;
 		this.onCloseCallback = onCloseCallback;
+		this.failureReason = failureReason;
+		this.plugin = plugin;
+		this.existingQuizFile = existingQuizFile;
+		this.quiz = quiz;
+		this.userAnswers = userAnswers;
 		
-		// Calculate initial star rating based on accuracy
+		// Calculate initial star rating based on accuracy (use exact percentage, not rounded)
 		const correct = results.filter(r => r.correct).length;
 		const total = results.length;
-		const accuracy = total > 0 ? (correct / total) * 100 : 0;
-		this.currentRating = this.calculateStarRating(accuracy);
+		this.totalQuestions = total;
+		const accuracyExact = total > 0 ? (correct / total) * 100 : 0;
+		this.currentRating = this.calculateStarRating(accuracyExact);
 		
 		this.modalEl.addClass("quiz-summary-modal-qg");
 	}
 
 	private calculateStarRating(accuracy: number): number {
+		// Calculate star rating based on accuracy percentage
+		// Supports quarter stars (0.25, 0.5, 0.75) and full stars
 		if (accuracy >= 95) return 5;
+		if (accuracy >= 90) return 4.75;
 		if (accuracy >= 85) return 4.5;
+		if (accuracy >= 80) return 4.25;
 		if (accuracy >= 75) return 4;
+		if (accuracy >= 70) return 3.75;
 		if (accuracy >= 65) return 3.5;
+		if (accuracy >= 60) return 3.25;
 		if (accuracy >= 55) return 3;
+		if (accuracy >= 50) return 2.75;
 		if (accuracy >= 45) return 2.5;
+		if (accuracy >= 40) return 2.25;
 		if (accuracy >= 35) return 2;
+		if (accuracy >= 30) return 1.75;
 		if (accuracy >= 25) return 1.5;
+		if (accuracy >= 20) return 1.25;
 		if (accuracy >= 15) return 1;
+		if (accuracy >= 10) return 0.75;
 		if (accuracy >= 5) return 0.5;
+		if (accuracy >= 2.5) return 0.25;
 		return 0;
 	}
 
-	onOpen(): void {
+	async onOpen(): Promise<void> {
 		super.onOpen();
 		
 		const gamification = this.settings.gamification || {
@@ -72,7 +103,9 @@ export default class QuizSummaryModal extends Modal {
 		
 		const correct = this.results.filter(r => r.correct).length;
 		const total = this.results.length;
-		const accuracy = total > 0 ? Math.round((correct / total) * 100) : 0;
+		// Use exact accuracy for star rating calculation, but round for display
+		const accuracyExact = total > 0 ? (correct / total) * 100 : 0;
+		const accuracy = Math.round(accuracyExact);
 		
 		// Format time
 		const formatTime = (seconds: number): string => {
@@ -85,55 +118,56 @@ export default class QuizSummaryModal extends Modal {
 		const card = this.contentEl.createDiv("quiz-summary-card-qg");
 		
 		// Title
-		card.createEl("h2", { text: "Quiz Complete! 🎉" });
+		if (this.failureReason) {
+			card.createEl("h2", { text: "Quiz Failed" });
+			const failureReasonDiv = card.createDiv("quiz-failure-reason-qg");
+			failureReasonDiv.style.color = "var(--text-error)";
+			failureReasonDiv.style.fontWeight = "bold";
+			failureReasonDiv.style.marginTop = "0.5em";
+			failureReasonDiv.style.marginBottom = "0.5em";
+			
+			// Create failure reason text with explanation
+			const reasonText = failureReasonDiv.createSpan();
+			reasonText.textContent = `Reason: ${this.failureReason}. `;
+			
+			// Add explanation about cheat mode
+			const explanationText = failureReasonDiv.createSpan();
+			explanationText.textContent = "No cheating mode is enabled in settings. ";
+			
+			// Add link to settings
+			if (this.plugin) {
+				const settingsLink = failureReasonDiv.createEl("a", {
+					text: "Open settings to manage this.",
+					href: "#"
+				});
+				settingsLink.style.color = "var(--text-accent)";
+				settingsLink.style.textDecoration = "underline";
+				settingsLink.style.cursor = "pointer";
+				settingsLink.addEventListener("click", (e) => {
+					e.preventDefault();
+					this.close();
+					// Open plugin settings
+					(this.app as any).setting.open();
+					(this.app as any).setting.openTabById("obsidian-quiz-generator");
+				});
+			} else {
+				const settingsText = failureReasonDiv.createSpan();
+				settingsText.textContent = "Go to plugin settings → Gamification → Advanced to disable 'No cheating mode'.";
+				settingsText.style.fontSize = "0.9em";
+			}
+		} else {
+			card.createEl("h2", { text: "Quiz Complete! 🎉" });
+		}
 		
-		// Star Rating
+		// Star Rating (automatic, based on accuracy)
 		if (gamification.showStarRating) {
 			const ratingContainer = card.createDiv("summary-rating-container-qg");
-			ratingContainer.createEl("div", { text: "Your Performance:", cls: "summary-label-qg" });
+			ratingContainer.createEl("div", { text: "Performance Rating:", cls: "summary-label-qg" });
 			const starContainer = ratingContainer.createDiv("star-rating-qg");
-			
-			const fullStars = Math.floor(this.currentRating);
-			const hasHalfStar = this.currentRating % 1 >= 0.5;
-			
-			for (let i = 0; i < 5; i++) {
-				const star = starContainer.createSpan("star-rating-star-qg");
-				star.style.cursor = "pointer";
-				
-				if (i < fullStars) {
-					star.textContent = "⭐";
-					star.addClass("full");
-				} else if (i === fullStars && hasHalfStar) {
-					star.textContent = "⭐";
-					star.addClass("half");
-				} else {
-					star.textContent = "☆";
-					star.addClass("empty");
-				}
-				
-			star.addEventListener("click", (e) => {
-				// Check if clicking on the right half for half-star selection
-				const rect = star.getBoundingClientRect();
-				const clickX = e.clientX - rect.left;
-				const isRightHalf = clickX > rect.width / 2;
-				
-				let newRating: number;
-				if (i < fullStars) {
-					// Clicking on full star - set to that position or half
-					newRating = isRightHalf ? i + 1 : i + 0.5;
-				} else if (i === fullStars && hasHalfStar) {
-					// Clicking on half star
-					newRating = isRightHalf ? i + 1 : i + 0.5;
-				} else {
-					// Clicking on empty star
-					newRating = isRightHalf ? i + 1 : i + 0.5;
-				}
-				
-				this.currentRating = Math.min(5, Math.max(0, newRating));
-				starContainer.empty();
-				this.renderStars(starContainer, this.currentRating);
-			});
-			}
+			// Recalculate rating using exact accuracy for display
+			const accuracyForRating = total > 0 ? (correct / total) * 100 : 0;
+			const rating = this.calculateStarRating(accuracyForRating);
+			this.renderStars(starContainer, rating);
 		}
 		
 		// Stats grid
@@ -167,8 +201,33 @@ export default class QuizSummaryModal extends Modal {
 		const scoreBreakdown = card.createDiv("summary-score-breakdown-qg");
 		scoreBreakdown.createEl("div", { text: `${correct} / ${total} correct`, cls: "score-text-qg" });
 		
+		// More details section (collapsible)
+		await this.renderMoreDetails(card, gamification, formatTime, correct, total);
+		
+		// Button container with spacing
+		const buttonContainer = card.createDiv("summary-buttons-container-qg");
+		
+		// Review button (if quiz and userAnswers are available)
+		if (this.quiz && this.userAnswers) {
+			const reviewButton = buttonContainer.createEl("button", {
+				text: "Review",
+				cls: "mod-cta"
+			});
+			
+			reviewButton.addEventListener("click", () => {
+				const reviewModal = new ReviewModal(
+					this.app,
+					this.settings,
+					this.quiz!,
+					this.results,
+					this.userAnswers!
+				);
+				reviewModal.open();
+			});
+		}
+		
 		// Share button
-		const shareButton = card.createEl("button", {
+		const shareButton = buttonContainer.createEl("button", {
 			text: "📸 Share Results",
 			cls: "mod-cta share-results-btn-qg"
 		});
@@ -177,15 +236,8 @@ export default class QuizSummaryModal extends Modal {
 			this.shareResults(card, gamification, accuracy, formatTime(this.elapsedTime));
 		});
 		
-		// Reflection prompt if wrong answers
-		if (gamification.showReflection && correct < total) {
-			setTimeout(() => {
-				this.showReflectionPrompt(correct < total);
-			}, 1000);
-		}
-		
 		// Close button
-		const closeButton = card.createEl("button", {
+		const closeButton = buttonContainer.createEl("button", {
 			text: "Close",
 			cls: "mod-secondary"
 		});
@@ -193,45 +245,46 @@ export default class QuizSummaryModal extends Modal {
 		closeButton.addEventListener("click", () => {
 			this.close();
 		});
+		
+		// Reflection prompt if wrong answers
+		if (gamification.showReflection && correct < total) {
+			setTimeout(() => {
+				this.showReflectionPrompt(correct < total);
+			}, 1000);
+		}
 	}
 
 	private renderStars(container: HTMLElement, rating: number): void {
-		const fullStars = Math.floor(rating);
-		const hasHalfStar = rating % 1 >= 0.5;
-		
+		// Render stars based on rating (supports quarter, half, three-quarter, and full stars)
+		// Rating is automatic based on accuracy, not interactive
 		for (let i = 0; i < 5; i++) {
 			const star = container.createSpan("star-rating-star-qg");
-			star.style.cursor = "pointer";
+			star.style.cursor = "default"; // Not interactive
 			
-			if (i < fullStars) {
+			const starValue = i + 1;
+			const remainder = rating - i;
+			
+			if (remainder >= 1) {
+				// Full star
 				star.textContent = "⭐";
 				star.addClass("full");
-			} else if (i === fullStars && hasHalfStar) {
+			} else if (remainder >= 0.75) {
+				// Three-quarter star
+				star.textContent = "⭐";
+				star.addClass("three-quarter");
+			} else if (remainder >= 0.5) {
+				// Half star
 				star.textContent = "⭐";
 				star.addClass("half");
+			} else if (remainder >= 0.25) {
+				// Quarter star
+				star.textContent = "⭐";
+				star.addClass("quarter");
 			} else {
+				// Empty star
 				star.textContent = "☆";
 				star.addClass("empty");
 			}
-			
-			star.addEventListener("click", (e) => {
-				const rect = star.getBoundingClientRect();
-				const clickX = e.clientX - rect.left;
-				const isRightHalf = clickX > rect.width / 2;
-				
-				let newRating: number;
-				if (i < fullStars) {
-					newRating = isRightHalf ? i + 1 : i + 0.5;
-				} else if (i === fullStars && hasHalfStar) {
-					newRating = isRightHalf ? i + 1 : i + 0.5;
-				} else {
-					newRating = isRightHalf ? i + 1 : i + 0.5;
-				}
-				
-				this.currentRating = Math.min(5, Math.max(0, newRating));
-				container.empty();
-				this.renderStars(container, this.currentRating);
-			});
 		}
 	}
 
@@ -319,10 +372,275 @@ export default class QuizSummaryModal extends Modal {
 		}
 	}
 
+	private async renderMoreDetails(card: HTMLElement, gamification: any, formatTime: (seconds: number) => string, correct: number, total: number): Promise<void> {
+		const detailsContainer = card.createDiv("quiz-more-details-container-qg");
+		
+		// Toggle button
+		const toggleButton = detailsContainer.createDiv("quiz-more-details-toggle-qg");
+		const isExpanded = this.settings.moreDetailsExpanded ?? true;
+		const icon = toggleButton.createSpan("quiz-details-icon-qg");
+		setIcon(icon, isExpanded ? "chevron-down" : "chevron-right");
+		toggleButton.createSpan({ text: "More details", cls: "quiz-details-label-qg" });
+		
+		// Content area
+		const contentArea = detailsContainer.createDiv("quiz-more-details-content-qg");
+		contentArea.style.display = isExpanded ? "block" : "none";
+		
+		// Toggle handler
+		toggleButton.style.cursor = "pointer";
+		toggleButton.addEventListener("click", async () => {
+			const isCurrentlyExpanded = contentArea.style.display !== "none";
+			contentArea.style.display = isCurrentlyExpanded ? "none" : "block";
+			setIcon(icon, isCurrentlyExpanded ? "chevron-right" : "chevron-down");
+			
+			// Save state to settings
+			if (this.plugin) {
+				this.plugin.settings.moreDetailsExpanded = !isCurrentlyExpanded;
+				await this.plugin.saveSettings();
+			}
+		});
+		
+		// Load and display stats
+		const stats = await this.loadQuizStats();
+		this.renderQuizStats(contentArea, stats, gamification, formatTime, correct, total);
+	}
+	
+	private async loadQuizStats(): Promise<QuizStats> {
+		const stats: QuizStats = {
+			totalQuestions: this.totalQuestions,
+			timesTaken: 0,
+			legendViewed: false,
+			hintsEnabled: this.settings.hintsEnabled,
+			maxHints: this.settings.gamification?.maxHintsPerQuiz ?? null,
+			bestScore: 0,
+			averageScore: 0,
+			improvement: null,
+			fastestTime: null,
+			averageTime: null,
+			totalAttempts: 0,
+			perfectScores: 0,
+			lastTaken: null
+		};
+		
+		if (!this.existingQuizFile) return stats;
+		
+		try {
+			const content = await this.app.vault.read(this.existingQuizFile);
+			const frontmatterInfo = getFrontMatterInfo(content);
+			
+			if (frontmatterInfo.exists) {
+				const fmLines = frontmatterInfo.frontmatter.split('\n');
+				
+				// Check legend viewed
+				stats.legendViewed = fmLines.some(line => 
+					line.trim().startsWith('quiz_legend_viewed:') && 
+					line.trim().includes('true')
+				);
+				
+				// Parse quiz attempts
+				const quizAttemptsLine = fmLines.find(line => line.trim().startsWith('quiz_attempts:'));
+				if (quizAttemptsLine) {
+					try {
+						const jsonMatch = quizAttemptsLine.match(/quiz_attempts:\s*(.+)$/);
+						if (jsonMatch) {
+							const attemptData = JSON.parse(jsonMatch[1]);
+							stats.totalAttempts = attemptData.length;
+							
+							// Group attempts by timestamp to count unique sessions
+							const sessionTimestamps = new Set<string>();
+							const sessionScores: number[] = [];
+							const sessionTimes: number[] = [];
+							
+							attemptData.forEach((attempt: any) => {
+								if (attempt.t) {
+									sessionTimestamps.add(attempt.t);
+								}
+							});
+							
+							stats.timesTaken = sessionTimestamps.size;
+							
+							// Calculate scores from attempts
+							const scoresBySession = new Map<string, { correct: number; total: number }>();
+							attemptData.forEach((attempt: any) => {
+								if (!attempt.t) return;
+								if (!scoresBySession.has(attempt.t)) {
+									scoresBySession.set(attempt.t, { correct: 0, total: 0 });
+								}
+								const session = scoresBySession.get(attempt.t)!;
+								session.total++;
+								if (attempt.c) session.correct++;
+							});
+							
+							scoresBySession.forEach((session, timestamp) => {
+								const score = session.total > 0 ? Math.round((session.correct / session.total) * 100) : 0;
+								sessionScores.push(score);
+								if (score === 100) stats.perfectScores++;
+								if (timestamp) {
+									const date = new Date(timestamp);
+									if (!stats.lastTaken || date > new Date(stats.lastTaken)) {
+										stats.lastTaken = timestamp;
+									}
+								}
+							});
+							
+							if (sessionScores.length > 0) {
+								stats.bestScore = Math.max(...sessionScores);
+								stats.averageScore = Math.round(
+									sessionScores.reduce((sum, score) => sum + score, 0) / sessionScores.length
+								);
+								
+								// Calculate improvement (compare last 2 sessions if available)
+								if (sessionScores.length >= 2) {
+									const recentScores = sessionScores.slice(-2);
+									const improvement = recentScores[1] - recentScores[0];
+									stats.improvement = improvement;
+								}
+							}
+							
+							// Get time from quiz_completed timestamps
+							const completedLines = fmLines.filter(line => line.trim().startsWith('quiz_completed:'));
+							if (completedLines.length > 0 && sessionTimes.length === 0) {
+								// We don't have time data in frontmatter, so we'll skip time stats
+							}
+						}
+					} catch (error) {
+						console.error("Error parsing quiz attempts:", error);
+					}
+				}
+			}
+		} catch (error) {
+			console.error("Error loading quiz stats:", error);
+		}
+		
+		return stats;
+	}
+	
+	private createDetailItem(container: HTMLElement, iconName: string, label: string, value: string, extraClasses: string = "", dataAttributes: Record<string, string> = {}): void {
+		const item = container.createDiv({ cls: `quiz-detail-item-qg ${extraClasses}`, attr: dataAttributes });
+		
+		const iconSpan = item.createSpan({ cls: 'quiz-detail-icon-qg' });
+		setIcon(iconSpan, iconName);
+		
+		const content = item.createDiv({ cls: 'quiz-detail-content-qg' });
+		const labelSpan = content.createSpan({ cls: 'quiz-detail-label-qg', text: label });
+		const valueSpan = content.createSpan({ cls: 'quiz-detail-value-qg', text: value });
+	}
+
+	private renderQuizStats(container: HTMLElement, stats: QuizStats, gamification: any, formatTime: (seconds: number) => string, currentCorrect: number, currentTotal: number): void {
+		const statsGrid = container.createDiv("quiz-details-stats-grid-qg");
+		
+		// Left column: Quiz Information
+		const leftColumn = statsGrid.createDiv("quiz-details-column-qg");
+		const basicInfo = leftColumn.createDiv("quiz-details-section-qg");
+		basicInfo.createEl("h3", { text: "Quiz Information", cls: "quiz-details-section-title-qg" });
+		
+		const basicList = basicInfo.createDiv("quiz-details-list-qg");
+		
+		this.createDetailItem(basicList, "repeat", "Taken", `${stats.timesTaken} time${stats.timesTaken !== 1 ? 's' : ''}`);
+		
+		const legendIcon = stats.legendViewed ? "check-circle-2" : "x-circle";
+		const legendColor = stats.legendViewed ? "true" : "false";
+		this.createDetailItem(
+			basicList, 
+			legendIcon, 
+			"Legend/key", 
+			stats.legendViewed ? "Viewed" : "Not viewed",
+			"",
+			{ "data-viewed": legendColor }
+		);
+		
+		const hintsIcon = stats.hintsEnabled ? "lightbulb" : "lightbulb-off";
+		const hintsText = stats.hintsEnabled 
+			? `${stats.maxHints !== null ? `max: ${stats.maxHints}` : 'unlimited'}` 
+			: "Disabled";
+		this.createDetailItem(
+			basicList,
+			hintsIcon,
+			"Hints",
+			hintsText,
+			"",
+			{ "data-enabled": stats.hintsEnabled ? "true" : "false" }
+		);
+		
+		// Right column: Performance stats
+		if (stats.totalAttempts > 0) {
+			const rightColumn = statsGrid.createDiv("quiz-details-column-qg");
+			const performanceSection = rightColumn.createDiv("quiz-details-section-qg");
+			performanceSection.createEl("h3", { text: "Performance", cls: "quiz-details-section-title-qg" });
+			
+			const perfList = performanceSection.createDiv("quiz-details-list-qg");
+			
+			this.createDetailItem(perfList, "trophy", "Best", `${stats.bestScore}%`, "quiz-stat-highlight-qg");
+			
+			if (stats.timesTaken > 1) {
+				this.createDetailItem(perfList, "bar-chart-2", "Average", `${stats.averageScore}%`);
+				
+				if (stats.improvement !== null) {
+					const improvementIcon = stats.improvement > 0 ? "trending-up" : stats.improvement < 0 ? "trending-down" : "minus";
+					const improvementText = stats.improvement > 0 
+						? `+${stats.improvement}%` 
+						: stats.improvement < 0 
+						? `${stats.improvement}%` 
+						: "No change";
+					this.createDetailItem(
+						perfList,
+						improvementIcon,
+						"Change",
+						improvementText,
+						stats.improvement > 0 ? 'quiz-stat-positive-qg' : stats.improvement < 0 ? 'quiz-stat-negative-qg' : ''
+					);
+				}
+			}
+			
+			this.createDetailItem(perfList, "star", "Perfect scores", `${stats.perfectScores}`);
+			
+			if (stats.lastTaken) {
+				const lastDate = new Date(stats.lastTaken);
+				const formattedDate = lastDate.toLocaleDateString() + ' ' + lastDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+				this.createDetailItem(perfList, "clock", "Last taken", formattedDate);
+			}
+		}
+		
+		// Current session stats (if applicable)
+		const currentScore = currentTotal > 0 ? Math.round((currentCorrect / currentTotal) * 100) : 0;
+		if (stats.totalAttempts > 0 && currentScore > 0) {
+			const rightColumn = statsGrid.querySelector(".quiz-details-column-qg:last-child") || statsGrid.createDiv("quiz-details-column-qg");
+			const currentSection = rightColumn.createDiv("quiz-details-section-qg");
+			currentSection.createEl("h3", { text: "This Session", cls: "quiz-details-section-title-qg" });
+			
+			const currentList = currentSection.createDiv("quiz-details-list-qg");
+			
+			if (currentScore > stats.bestScore) {
+				this.createDetailItem(currentList, "sparkles", "New best", `${currentScore}%`, "quiz-stat-new-record-qg");
+			} else if (currentScore === stats.bestScore) {
+				this.createDetailItem(currentList, "star", "Tied best", `${currentScore}%`, "quiz-stat-match-qg");
+			} else {
+				const diff = stats.bestScore - currentScore;
+				this.createDetailItem(currentList, "target", "Current", `${currentScore}% (${diff}% from best)`);
+			}
+		}
+	}
+	
 	onClose(): void {
 		this.contentEl.empty();
 		this.onCloseCallback();
 		super.onClose();
 	}
+}
+
+interface QuizStats {
+	totalQuestions: number;
+	timesTaken: number;
+	legendViewed: boolean;
+	hintsEnabled: boolean;
+	maxHints: number | null;
+	bestScore: number;
+	averageScore: number;
+	improvement: number | null;
+	fastestTime: number | null;
+	averageTime: number | null;
+	totalAttempts: number;
+	perfectScores: number;
+	lastTaken: string | null;
 }
 

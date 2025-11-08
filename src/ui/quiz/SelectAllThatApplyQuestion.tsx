@@ -5,17 +5,26 @@ import { SelectAllThatApply } from "../../utils/types";
 interface SelectAllThatApplyQuestionProps {
 	app: App;
 	question: SelectAllThatApply;
-	onAnswer?: (correct: boolean) => void;
+	onAnswer?: (correct: boolean, userAnswer?: any) => void;
 	onChoose?: () => void;
 	answered?: boolean;
 	onRepeat?: () => void;
 	showRepeat?: boolean;
+	hideResults?: boolean;
+	savedUserAnswer?: any;
 }
 
-const SelectAllThatApplyQuestion = ({ app, question, onAnswer, onChoose, answered = false, onRepeat, showRepeat = false }: SelectAllThatApplyQuestionProps) => {
-	const [userAnswer, setUserAnswer] = useState<number[]>([]);
+const SelectAllThatApplyQuestion = ({ app, question, onAnswer, onChoose, answered = false, onRepeat, showRepeat = false, hideResults = false, savedUserAnswer }: SelectAllThatApplyQuestionProps) => {
+	const [userAnswer, setUserAnswer] = useState<number[]>(Array.isArray(savedUserAnswer) ? savedUserAnswer : []);
 	const [submitted, setSubmitted] = useState<boolean>(false);
 	const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
+	
+	// Update userAnswer when savedUserAnswer changes (e.g., when navigating back to question)
+	useEffect(() => {
+		if (Array.isArray(savedUserAnswer)) {
+			setUserAnswer(savedUserAnswer);
+		}
+	}, [savedUserAnswer]);
 	
 	// If already answered, set submitted state
 	useEffect(() => {
@@ -88,6 +97,13 @@ const SelectAllThatApplyQuestion = ({ app, question, onAnswer, onChoose, answere
 	}, [app, question, showRepeat, onRepeat]);
 
 	const toggleSelection = (buttonAnswer: number) => {
+		if (!canEdit) return;
+		
+		// If editing in review-at-end mode, reset submitted status
+		if (hideResults && submitted) {
+			setSubmitted(false);
+		}
+		
 		if (onChoose && !submitted) {
 			onChoose(); // Play choose sound when selecting/deselecting options
 		}
@@ -108,6 +124,12 @@ const SelectAllThatApplyQuestion = ({ app, question, onAnswer, onChoose, answere
 			baseClass += " focused-choice-qg";
 		}
 		
+		// Don't show correct/incorrect styling if results are hidden
+		if (hideResults && submitted) {
+			if (userAnswer.includes(buttonAnswer)) return `${baseClass} selected-choice-qg`;
+			return baseClass;
+		}
+		
 		if (submitted) {
 			const correct = question.answer.includes(buttonAnswer);
 			const selected = userAnswer.includes(buttonAnswer);
@@ -126,12 +148,31 @@ const SelectAllThatApplyQuestion = ({ app, question, onAnswer, onChoose, answere
 		// Check if arrays match (same elements, order doesn't matter)
 		const correct = userAnswer.length === question.answer.length &&
 			userAnswer.every(answer => question.answer.includes(answer));
-		onAnswer?.(correct);
+		onAnswer?.(correct, [...userAnswer]);
 	};
+	
+	// Allow editing in review-at-end mode
+	const canEdit = hideResults || !submitted;
+	
+	// Auto-submit when answer changes in review-at-end mode (but allow editing after)
+	useEffect(() => {
+		if (hideResults && !submitted && userAnswer.length > 0) {
+			// Auto-submit after a short delay to allow multiple selections
+			const timeout = setTimeout(() => {
+				if (!submitted && userAnswer.length > 0) {
+					// Don't calculate correctness, just store the answer
+					onAnswer?.(false, [...userAnswer]); // Pass false, will be calculated later
+					setSubmitted(true);
+					setFocusedIndex(null);
+				}
+			}, 500);
+			return () => clearTimeout(timeout);
+		}
+	}, [hideResults, userAnswer.length, submitted, onAnswer]);
 
 	// Keyboard navigation handler
 	useEffect(() => {
-		if (submitted) return;
+		if (!canEdit) return;
 
 		const handleKeyDown = (event: KeyboardEvent) => {
 			// Don't handle if in an input field
@@ -221,19 +262,21 @@ const SelectAllThatApplyQuestion = ({ app, question, onAnswer, onChoose, answere
 						ref={(el) => buttonRefs.current[index] = el}
 						className={getButtonClass(index)}
 						onClick={() => toggleSelection(index)}
-						disabled={submitted}
+						disabled={!canEdit}
 						data-choice-number={index + 1}
 					/>
 				))}
 			</div>
-			<button
-				ref={submitButtonRef}
-				className={`submit-answer-qg ${focusedIndex === question.options.length && !submitted ? 'focused-choice-qg' : ''}`}
-				onClick={handleSubmit}
-				disabled={!userAnswer.length || submitted}
-			>
-				Submit
-			</button>
+			{!hideResults && (
+				<button
+					ref={submitButtonRef}
+					className={`submit-answer-qg ${focusedIndex === question.options.length && !submitted ? 'focused-choice-qg' : ''}`}
+					onClick={handleSubmit}
+					disabled={!userAnswer.length || submitted}
+				>
+					Submit
+				</button>
+			)}
 		</div>
 	);
 };

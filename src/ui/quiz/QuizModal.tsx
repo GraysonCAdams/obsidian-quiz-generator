@@ -28,6 +28,10 @@ import ConfettiEffect from "../components/ConfettiEffect";
 import ElevenLabsCreditCheckModal from "./ElevenLabsCreditCheckModal";
 import type QuizGenerator from "../../main";
 import SelectorModal from "../selector/selectorModal";
+import GeneratorFactory from "../../generators/generatorFactory";
+import ReviewModal from "./ReviewModal";
+
+type DraftResponse = string | string[];
 
 interface QuizModalProps {
 	app: App;
@@ -51,6 +55,10 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 	const [quiz, setQuiz] = useState<Question[]>(initialQuiz);
 	const [quizResults, setQuizResults] = useState<Map<number, boolean>>(new Map());
 	const [answerOrder, setAnswerOrder] = useState<boolean[]>([]); // Track answers in order answered
+	const [userAnswers, setUserAnswers] = useState<Map<number, any>>(new Map()); // Track user's actual answers
+	const [isScoring, setIsScoring] = useState<boolean>(false); // Loading state for scoring
+	const [showUnansweredOnly, setShowUnansweredOnly] = useState<boolean>(false); // Filter to unanswered questions
+	const [unansweredSnapshot, setUnansweredSnapshot] = useState<Set<number> | null>(null); // Snapshot of unanswered question indices when entering unanswered-only mode
 	const [correctStreak, setCorrectStreak] = useState<number>(0);
 	const [elapsedTime, setElapsedTime] = useState<number>(0);
 	const [questionTimer, setQuestionTimer] = useState<number>(0);
@@ -60,6 +68,17 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 	const [voiceMuted, setVoiceMuted] = useState<boolean>(settings.gamification?.voiceMuted ?? false);
 	const [audioPreGenerated, setAudioPreGenerated] = useState<boolean>(false);
 	const [showHotkeyOverlays, setShowHotkeyOverlays] = useState<boolean>(false);
+	const [hintsUsed, setHintsUsed] = useState<number>(0);
+	const [currentHint, setCurrentHint] = useState<string | null>(null);
+	const [generatingHint, setGeneratingHint] = useState<boolean>(false);
+	const [cursorLeaveCountdown, setCursorLeaveCountdown] = useState<number | null>(null);
+	const [cheatingDetected, setCheatingDetected] = useState<boolean>(false);
+	const [draftResponses, setDraftResponses] = useState<Record<string, DraftResponse>>({});
+	const userAnswersRef = useRef<Map<number, any>>(new Map()); // Ref to store answers immediately (before state updates)
+	const hintCacheRef = useRef<Map<string, string>>(new Map()); // Cache hints by question hash
+	const hintButtonRef = useRef<HTMLButtonElement>(null);
+	const cursorLeaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+	const cursorLeaveCountdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
 	const streakTrackerRef = useRef<StreakTracker>(new StreakTracker(app));
 	const elevenLabsRef = useRef<ElevenLabsService | null>(null);
 	const soundManagerRef = useRef<SoundManager | null>(null);
@@ -83,22 +102,172 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 	// Generate hashes for all questions - memoized to prevent recalculation
 	const allQuestionHashes = useMemo(() => quiz.map(q => hashString(JSON.stringify(q))), [quiz]);
 	
-	// Filter questions based on skipCorrect setting - memoized to prevent infinite loops
+	// Helper function to check if a question is answered (including draft text for text input questions in review mode)
+	const isQuestionAnswered = useCallback((originalIndex: number, question: Question, hash: string, hideResults: boolean): boolean => {
+		// Check if explicitly answered
+		const userAnswer = userAnswersRef.current.get(originalIndex) ?? userAnswers.get(originalIndex);
+		
+		// For matching questions, check if all pairs are matched
+		if (isMatching(question)) {
+			if (userAnswer && Array.isArray(userAnswer)) {
+				// A matching question is only answered when all pairs are matched
+				return userAnswer.length === question.answer.length;
+			}
+			return false;
+		}
+		
+		// For other question types, check if there's an answer
+		if (userAnswer !== undefined && userAnswer !== null) {
+			return true;
+		}
+		
+		// In review mode, check if there's draft text for text input questions
+		if (hideResults) {
+			const draftValue = draftResponses[hash];
+			if (isFillInTheBlank(question)) {
+				// For fill-in-the-blank, check if any input has text
+				if (Array.isArray(draftValue)) {
+					return draftValue.some(val => val && val.trim().length > 0);
+				}
+			} else if (isShortOrLongAnswer(question)) {
+				// For short/long answer, check if there's text
+				if (typeof draftValue === "string") {
+					return draftValue.trim().length > 0;
+				}
+			}
+		}
+		
+		return false;
+	}, [userAnswers, draftResponses]);
+	
+	// Filter questions based on skipCorrect setting and unanswered filter - memoized to prevent infinite loops
 	const filteredQuizData = useMemo(() => {
-		return quiz.map((q, index) => ({
+		let filtered = quiz.map((q, index) => ({
 			question: q,
 			originalIndex: index,
 			hash: allQuestionHashes[index]
-		})).filter(item => {
-			if (!skipCorrect) return true;
-			const wasCorrect = previousAttempts.get(item.hash);
-			return wasCorrect !== true; // Include if never attempted or was incorrect
-		});
-	}, [quiz, skipCorrect, previousAttempts, allQuestionHashes]);
+		}));
+		
+		// Filter by skipCorrect setting
+		if (skipCorrect) {
+			filtered = filtered.filter(item => {
+				const wasCorrect = previousAttempts.get(item.hash);
+				return wasCorrect !== true; // Include if never attempted or was incorrect
+			});
+		}
+		
+		// Filter to unanswered questions if showUnansweredOnly is true
+		// Use snapshot if available, otherwise calculate on the fly
+		if (showUnansweredOnly) {
+			if (unansweredSnapshot) {
+				// Use snapshot to filter - don't recalculate during review
+				filtered = filtered.filter(item => unansweredSnapshot.has(item.originalIndex));
+			} else {
+				// Fallback: calculate on the fly (shouldn't happen, but just in case)
+				filtered = filtered.filter(item => {
+					const hideResults = settings.showResultsAtEndOnly ?? false;
+					return !isQuestionAnswered(item.originalIndex, item.question, item.hash, hideResults);
+				});
+			}
+		}
+		
+		return filtered;
+	}, [quiz, skipCorrect, previousAttempts, allQuestionHashes, showUnansweredOnly, unansweredSnapshot, isQuestionAnswered, settings.showResultsAtEndOnly]);
 	
 	const activeQuestions = useMemo(() => filteredQuizData.map(item => item.question), [filteredQuizData]);
 	const activeOriginalIndices = useMemo(() => filteredQuizData.map(item => item.originalIndex), [filteredQuizData]);
 	const questionHashes = useMemo(() => filteredQuizData.map(item => item.hash), [filteredQuizData]);
+	const currentQuestionHash = questionHashes[questionIndex];
+	
+	// Auto-navigate to score page when all unanswered questions are answered
+	useEffect(() => {
+		const hideResults = settings.showResultsAtEndOnly ?? false;
+		if (!hideResults || !showUnansweredOnly) return;
+		
+		// Check if there are any remaining unanswered questions in the full active set
+		const allActiveOriginalIndices = quiz.map((q, idx) => ({
+			originalIndex: idx,
+			hash: allQuestionHashes[idx]
+		})).filter(item => {
+			if (skipCorrect) {
+				const wasCorrect = previousAttempts.get(item.hash);
+				return wasCorrect !== true;
+			}
+			return true;
+		}).map(item => item.originalIndex);
+		
+		const remainingUnanswered = allActiveOriginalIndices.filter(origIdx => {
+			const question = quiz[origIdx];
+			const hash = allQuestionHashes[origIdx];
+			return !isQuestionAnswered(origIdx, question, hash, hideResults);
+		});
+		
+		// If no more unanswered questions and we're in unanswered-only mode, go to score page
+		if (remainingUnanswered.length === 0 && showUnansweredOnly) {
+			setShowUnansweredOnly(false);
+			setUnansweredSnapshot(null); // Clear snapshot when exiting unanswered-only mode
+			setQuestionIndex(allActiveOriginalIndices.length); // Go to score page
+		}
+	}, [settings, showUnansweredOnly, userAnswers, quiz, skipCorrect, previousAttempts, allQuestionHashes, isQuestionAnswered]);
+	
+	// Note: Unanswered count is recalculated in renderQuestion() every time the score page is rendered
+	// This ensures the button count is always up-to-date when returning to the score page
+	
+	const wrongCountForQuestion = currentQuestionHash ? questionWrongCounts?.get(currentQuestionHash) : undefined;
+	const showWrongBadge = wrongCountForQuestion !== undefined && wrongCountForQuestion > 0;
+	const showSkipInline = !showWrongBadge && currentQuestionHash !== undefined && previousAttempts.get(currentQuestionHash) === true;
+	const updateDraftResponse = useCallback((hash: string, value: DraftResponse | null) => {
+		if (!hash) return;
+		setDraftResponses(prev => {
+			if (value === null) {
+				if (!(hash in prev)) return prev;
+				const { [hash]: _, ...rest } = prev;
+				return rest;
+			}
+			const normalizedValue = Array.isArray(value) ? [...value] : value;
+			const existing = prev[hash];
+			if (Array.isArray(normalizedValue) && Array.isArray(existing)) {
+				if (normalizedValue.length === existing.length && normalizedValue.every((val, index) => val === (existing as string[])[index])) {
+					return prev;
+				}
+			} else if (!Array.isArray(normalizedValue) && existing === normalizedValue) {
+				return prev;
+			}
+			return { ...prev, [hash]: normalizedValue };
+		});
+	}, []);
+
+	const clearDraftResponses = useCallback((hashes: string[]) => {
+		if (hashes.length === 0) return;
+		setDraftResponses(prev => {
+			let changed = false;
+			const next: Record<string, DraftResponse> = { ...prev };
+			for (const hash of hashes) {
+				if (hash && hash in next) {
+					delete next[hash];
+					changed = true;
+				}
+			}
+			return changed ? next : prev;
+		});
+	}, []);
+
+	useEffect(() => {
+		const allowed = new Set(allQuestionHashes);
+		setDraftResponses(prev => {
+			let changed = false;
+			const next: Record<string, DraftResponse> = {};
+			for (const [hash, value] of Object.entries(prev)) {
+				if (allowed.has(hash)) {
+					next[hash] = value;
+				} else {
+					changed = true;
+				}
+			}
+			return changed ? next : prev;
+		});
+	}, [allQuestionHashes]);
+
 	
 	// Use consistent timestamp for this entire quiz session
 	const [sessionTimestamp] = useState<string>(new Date().toISOString());
@@ -200,6 +369,7 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 			voiceMuteButtonRef.current.setAttribute("data-tooltip-position", "bottom");
 		}
 	}, [voiceMuted]);
+
 
 	useEffect(() => {
 		if (keyboardIconButtonRef.current) {
@@ -475,7 +645,7 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 			
 			// Navigation shortcuts - only work if pagination is enabled
 			if (gamification.paginationEnabled) {
-				if (event.key === 'ArrowLeft' || key === 'k') {
+				if (event.key === 'ArrowLeft' || key === 'j') {
 					event.preventDefault();
 					// Go to previous question
 					if (questionIndex > 0) {
@@ -484,10 +654,14 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 					return;
 				}
 				
-				if (event.key === 'ArrowRight' || key === 'j') {
+				if (event.key === 'ArrowRight' || key === 'k') {
 					event.preventDefault();
-					// Go to next question
-					if (questionIndex < activeQuestions.length - 1) {
+					const hideResults = settings.showResultsAtEndOnly ?? false;
+					// Go to next question or Score My Quiz page
+					if (hideResults && questionIndex === activeQuestions.length - 1) {
+						// Go to Score My Quiz page
+						setQuestionIndex(questionIndex + 1);
+					} else if (questionIndex < activeQuestions.length - 1) {
 						handleNextQuestion();
 					}
 					return;
@@ -533,17 +707,27 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 				}
 				
 				// Space to select/activate (for multiple choice, true/false, select all that apply)
+				// Only work if question has been answered
 				if (isMultipleChoice(currentQuestion) || isTrueFalse(currentQuestion) || isSelectAllThatApply(currentQuestion)) {
-					const modalElement = document.querySelector('.modal-qg');
-					if (modalElement) {
-						const questionContainer = modalElement.querySelector('.question-content-wrapper-qg');
-						if (questionContainer) {
-							// Find first non-disabled button
-							const buttons = questionContainer.querySelectorAll('button:not([disabled])');
-							if (buttons.length > 0) {
-								const firstButton = buttons[0] as HTMLElement;
-								firstButton.click();
-								firstButton.focus(); // Focus it for next time
+					const hideResults = settings.showResultsAtEndOnly ?? false;
+					const originalIndex = activeOriginalIndices[questionIndex];
+					// Check if question has been answered
+					const isAnswered = hideResults 
+						? (userAnswersRef.current.has(originalIndex) || userAnswers.has(originalIndex))
+						: quizResults.has(originalIndex);
+					
+					if (isAnswered) {
+						const modalElement = document.querySelector('.modal-qg');
+						if (modalElement) {
+							const questionContainer = modalElement.querySelector('.question-content-wrapper-qg');
+							if (questionContainer) {
+								// Find first non-disabled button
+								const buttons = questionContainer.querySelectorAll('button:not([disabled])');
+								if (buttons.length > 0) {
+									const firstButton = buttons[0] as HTMLElement;
+									firstButton.click();
+									firstButton.focus(); // Focus it for next time
+								}
 							}
 						}
 					}
@@ -585,27 +769,16 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 	// Update the ref function when dependencies change
 	useEffect(() => {
 		playQuestionAudioRef.current = () => {
-			console.log('[QuizModal] playQuestionAudio called', {
-				questionIndex,
-				elevenLabsEnabled: gamification.elevenLabsEnabled,
-				hasService: !!elevenLabsRef.current,
-				voiceMuted,
-				audioPreGenerated: audioPreGeneratedRef.current
-			});
-
 			if (!gamification.elevenLabsEnabled || !elevenLabsRef.current || voiceMuted) {
-				console.log('[QuizModal] playQuestionAudio early return - disabled or muted');
 				return;
 			}
 
 			// Don't play audio if not pre-generated yet (waiting for credit check)
 			if (!audioPreGeneratedRef.current) {
-				console.log('[QuizModal] playQuestionAudio early return - audio not pre-generated yet');
 				return;
 			}
 
 			// Stop any currently playing audio first
-			console.log('[QuizModal] Stopping all audio before playing new question');
 			elevenLabsRef.current.stopAllAudio();
 
 			const currentQuestion = activeQuestions[questionIndex];
@@ -613,33 +786,21 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 			const questionHash = questionHashes[questionIndex];
 			const cacheKey = `q-${originalIndex}-${questionHash}`;
 
-			console.log('[QuizModal] Attempting to play audio', {
-				cacheKey,
-				hasCached: audioCacheRef.current.has(cacheKey),
-				originalIndex,
-				questionHash
-			});
-
 			if (audioCacheRef.current.has(cacheKey)) {
 				const audio = audioCacheRef.current.get(cacheKey)!.cloneNode(true) as HTMLAudioElement;
-				console.log('[QuizModal] Using cached audio, cloning and tracking');
 				// Track this audio element
 				elevenLabsRef.current.trackAudio(audio);
 				// Wait 1 second before playing
 				setTimeout(() => {
 					if (!voiceMuted && elevenLabsRef.current) {
-						console.log('[QuizModal] Playing cloned audio after 1s delay');
 						audio.play().then(() => {
-							console.log('[QuizModal] Audio play started successfully');
+							// Audio play started successfully
 						}).catch(err => {
 							console.error('[QuizModal] Audio play error:', err);
 						});
-					} else {
-						console.log('[QuizModal] Audio play skipped - voice muted or service unavailable');
 					}
 				}, 1000);
 			} else {
-				console.log('[QuizModal] Audio not in cache, generating on demand');
 				// Fallback: generate on demand if pre-generation failed
 				// Replace blank markers with "BLANK" for audio, then clean markdown
 				let questionText = currentQuestion.question.replace(/`_+`/g, ' BLANK ');
@@ -647,7 +808,6 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 				if (questionText) {
 					elevenLabsRef.current.generateAudio(questionText, cacheKey).then(audio => {
 						if (audio && !voiceMuted) {
-							console.log('[QuizModal] Generated audio on demand, caching and playing');
 							audioCacheRef.current.set(cacheKey, audio);
 							const cloned = audio.cloneNode(true) as HTMLAudioElement;
 							// Track this audio element
@@ -655,9 +815,8 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 							// Wait 1 second before playing
 							setTimeout(() => {
 								if (!voiceMuted && elevenLabsRef.current) {
-									console.log('[QuizModal] Playing on-demand generated audio');
 									cloned.play().then(() => {
-										console.log('[QuizModal] On-demand audio play started successfully');
+										// On-demand audio play started successfully
 									}).catch(err => {
 										console.error('[QuizModal] On-demand audio play error:', err);
 									});
@@ -671,6 +830,23 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 			}
 		};
 	}, [questionIndex, activeQuestions, gamification.elevenLabsEnabled, voiceMuted, activeOriginalIndices, questionHashes]);
+
+	// Clear hint when question changes (but keep cached hint available)
+	useEffect(() => {
+		setCurrentHint(null);
+		// Check if we have a cached hint for this question
+		const currentHash = questionHashes[questionIndex];
+		if (currentHash && hintCacheRef.current.has(currentHash)) {
+			setCurrentHint(hintCacheRef.current.get(currentHash) || null);
+		}
+	}, [questionIndex, questionHashes]);
+
+	// Set icon for hint button
+	useEffect(() => {
+		if (hintButtonRef.current) {
+			setIcon(hintButtonRef.current, "lightbulb");
+		}
+	}, []);
 
 	// Question timer effect
 	useEffect(() => {
@@ -817,10 +993,6 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 		}
 		
 		return () => {
-			console.log('[QuizModal] Question timer useEffect cleanup', {
-				questionIndex,
-				clearingIntervals: true
-			});
 			if (questionTimerRef.current) {
 				clearInterval(questionTimerRef.current);
 			}
@@ -834,7 +1006,6 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 			}
 			// Stop audio when question changes
 			if (elevenLabsRef.current) {
-				console.log('[QuizModal] Stopping audio during cleanup');
 				elevenLabsRef.current.stopAllAudio();
 			}
 		};
@@ -849,17 +1020,14 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 
 		// Only play audio if it's been pre-generated
 		if (!audioPreGeneratedRef.current) {
-			console.log('[QuizModal] Audio playback effect skipped - audio not pre-generated yet');
 			return;
 		}
 
 		// Prevent double-play: only play if we haven't already played for this question
 		if (audioPlayedForQuestionRef.current === questionIndex) {
-			console.log('[QuizModal] Audio playback effect skipped - already played for question', questionIndex);
 			return;
 		}
 
-		console.log('[QuizModal] Audio playback effect - question changed, playing audio');
 		audioPlayedForQuestionRef.current = questionIndex; // Mark as played
 		if (playQuestionAudioRef.current) {
 			playQuestionAudioRef.current();
@@ -875,6 +1043,30 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 			clearTimeout(autoProgressRef.current);
 			autoProgressRef.current = null;
 		}
+		
+		const hideResults = settings.showResultsAtEndOnly ?? false;
+		
+		// If we're on the Score My Quiz page, go back to last question and reset filter
+		if (hideResults && questionIndex === activeQuestions.length) {
+			setShowUnansweredOnly(false); // Reset filter when going back from score page
+			setUnansweredSnapshot(null); // Clear snapshot when exiting unanswered-only mode
+			// Get all active questions (not filtered) to determine the last question index
+			const allActiveOriginalIndices = quiz.map((q, idx) => ({
+				originalIndex: idx,
+				hash: allQuestionHashes[idx]
+			})).filter(item => {
+				if (skipCorrect) {
+					const wasCorrect = previousAttempts.get(item.hash);
+					return wasCorrect !== true;
+				}
+				return true;
+			}).map(item => item.originalIndex);
+			
+			const allActiveQuestionsCount = allActiveOriginalIndices.length;
+			setQuestionIndex(Math.max(0, allActiveQuestionsCount - 1));
+			return;
+		}
+		
 		if (questionIndex > 0) {
 			setQuestionIndex(questionIndex - 1);
 		}
@@ -889,6 +1081,18 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 			clearTimeout(autoProgressRef.current);
 			autoProgressRef.current = null;
 		}
+		
+		const hideResults = settings.showResultsAtEndOnly ?? false;
+		
+		// If we're on the last question and hideResults is true, go to "Score My Quiz" page
+		// Also reset unanswered filter when reaching the score page
+		if (hideResults && questionIndex === activeQuestions.length - 1) {
+			setShowUnansweredOnly(false); // Reset filter when going to score page
+			setUnansweredSnapshot(null); // Clear snapshot when exiting unanswered-only mode
+			setQuestionIndex(questionIndex + 1);
+			return;
+		}
+		
 		if (questionIndex < activeQuestions.length - 1) {
 			setQuestionIndex(questionIndex + 1);
 		}
@@ -907,6 +1111,107 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 			window.removeEventListener('quiz-auto-progress', handleAutoProgress);
 		};
 	}, [questionIndex, activeQuestions.length]);
+	
+	// Listen for navigation events from question components (e.g., Enter in review mode)
+	useEffect(() => {
+		const handleNavigateNext = () => {
+			// Only allow navigation if pagination is enabled
+			if (!gamification.paginationEnabled) return;
+			
+			// Clear auto-progress if navigating manually
+			if (autoProgressRef.current) {
+				clearTimeout(autoProgressRef.current);
+				autoProgressRef.current = null;
+			}
+			
+			const hideResults = settings.showResultsAtEndOnly ?? false;
+			
+			// If we're on the last question and hideResults is true, go to "Score My Quiz" page
+			// Also reset unanswered filter when reaching the score page
+			if (hideResults && questionIndex === activeQuestions.length - 1) {
+				setShowUnansweredOnly(false); // Reset filter when going to score page
+				setUnansweredSnapshot(null); // Clear snapshot when exiting unanswered-only mode
+				setQuestionIndex(questionIndex + 1);
+				return;
+			}
+			
+			if (questionIndex < activeQuestions.length - 1) {
+				setQuestionIndex(questionIndex + 1);
+			}
+		};
+		
+		window.addEventListener('quiz-navigate-next', handleNavigateNext);
+		return () => {
+			window.removeEventListener('quiz-navigate-next', handleNavigateNext);
+		};
+	}, [questionIndex, activeQuestions.length, settings.showResultsAtEndOnly, gamification.paginationEnabled]);
+
+	const handleRequestHint = async () => {
+		if (!settings.hintsEnabled) {
+			new Notice("Hints are not enabled. Enable them in plugin settings.");
+			return;
+		}
+
+		const currentQuestion = activeQuestions[questionIndex];
+		if (!currentQuestion) return;
+
+		// Check cache first - if cached, allow showing it regardless of max hints limit
+		const currentHash = questionHashes[questionIndex];
+		const cachedHint = hintCacheRef.current.get(currentHash);
+		
+		if (cachedHint) {
+			// Use cached hint - allowed even if max hints reached
+			setCurrentHint(cachedHint);
+			new Notice(cachedHint, 10000); // Show for 10 seconds
+			return;
+		}
+
+		// Only enforce max hints limit when generating a new hint
+		const maxHints = settings.gamification?.maxHintsPerQuiz ?? null;
+		if (maxHints !== null && hintsUsed >= maxHints) {
+			new Notice(`Maximum hints (${maxHints}) reached for this quiz session.`);
+			return;
+		}
+
+		// Generate new hint
+		setGeneratingHint(true);
+		try {
+			const generator = GeneratorFactory.createInstance(settings);
+			
+			// Format answer based on question type
+			let answer: string | boolean | number | number[] | string[] | Array<{leftOption: string; rightOption: string}>;
+			if (isTrueFalse(currentQuestion)) {
+				answer = currentQuestion.answer;
+			} else if (isMultipleChoice(currentQuestion)) {
+				answer = currentQuestion.answer;
+			} else if (isSelectAllThatApply(currentQuestion)) {
+				answer = currentQuestion.answer;
+			} else if (isFillInTheBlank(currentQuestion)) {
+				answer = currentQuestion.answer;
+			} else if (isMatching(currentQuestion)) {
+				answer = currentQuestion.answer;
+			} else {
+				answer = currentQuestion.answer;
+			}
+
+			const hint = await generator.generateHint(currentQuestion.question, answer);
+			if (hint) {
+				// Cache the hint
+				hintCacheRef.current.set(currentHash, hint);
+				setCurrentHint(hint);
+				setHintsUsed(prev => prev + 1);
+				// Show hint in a notice
+				new Notice(hint, 10000); // Show for 10 seconds
+			} else {
+				new Notice("Failed to generate hint. Please try again.");
+			}
+		} catch (error) {
+			console.error("Error generating hint:", error);
+			new Notice("Error generating hint. Please try again.");
+		} finally {
+			setGeneratingHint(false);
+		}
+	};
 
 	const handleDeleteQuestion = () => {
 		if (activeQuestions.length <= 1) {
@@ -931,7 +1236,87 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 		new Notice("Question deleted");
 	};
 
-	const handleAnswerResult = (correct: boolean) => {
+	// Calculate scores for all questions (used in review-at-end mode)
+	const calculateAllScores = async (): Promise<QuizResult[]> => {
+		const results: QuizResult[] = [];
+		const hideResults = settings.showResultsAtEndOnly ?? false;
+		
+		// Get all active questions (not filtered by unanswered filter)
+		const allActiveQuestions = quiz.map((q, idx) => ({
+			question: q,
+			originalIndex: idx,
+			hash: allQuestionHashes[idx]
+		})).filter(item => {
+			if (skipCorrect) {
+				const wasCorrect = previousAttempts.get(item.hash);
+				return wasCorrect !== true;
+			}
+			return true;
+		});
+		
+		for (let i = 0; i < allActiveQuestions.length; i++) {
+			const { question, originalIndex } = allActiveQuestions[i];
+			// Check ref first (immediate) then fall back to state
+			const userAnswer = userAnswersRef.current.get(originalIndex) ?? userAnswers.get(originalIndex);
+			
+			if (userAnswer === undefined) {
+				// No answer provided, mark as incorrect
+				results.push({ questionIndex: originalIndex, correct: false });
+				continue;
+			}
+			
+			let correct = false;
+			
+			// Calculate correctness based on question type
+			if (isTrueFalse(question)) {
+				correct = userAnswer === question.answer;
+			} else if (isMultipleChoice(question)) {
+				// Support both single answer (legacy) and multiple selections
+				const userSelections = Array.isArray(userAnswer) ? userAnswer : [userAnswer];
+				correct = userSelections.includes(question.answer);
+			} else if (isSelectAllThatApply(question)) {
+				const userAnswerArray = Array.isArray(userAnswer) ? userAnswer : [];
+				const userSet = new Set(userAnswerArray);
+				const answerSet = new Set(question.answer);
+				correct = userSet.size === answerSet.size && 
+					Array.from(userSet).every((val: number) => answerSet.has(val));
+			} else if (isFillInTheBlank(question)) {
+				const userAnswersArray = Array.isArray(userAnswer) ? userAnswer : [userAnswer];
+				correct = question.answer.every((ans, idx) => 
+					userAnswersArray[idx]?.toLowerCase().trim() === ans.toLowerCase().trim()
+				);
+			} else if (isMatching(question)) {
+				// For matching, userAnswer is an array of {leftOption, rightOption} pairs
+				const userPairs = Array.isArray(userAnswer) ? userAnswer : [];
+				const correctPairsMap = new Map<string, string>();
+				question.answer.forEach(pair => {
+					correctPairsMap.set(pair.leftOption, pair.rightOption);
+				});
+				correct = userPairs.length === question.answer.length &&
+					userPairs.every(pair => correctPairsMap.get(pair.leftOption) === pair.rightOption);
+			} else if (isShortOrLongAnswer(question)) {
+				// For short/long answer, we need to check similarity
+				// This requires async evaluation, so we'll handle it separately
+				try {
+					const GeneratorFactory = (await import("../../generators/generatorFactory")).default;
+					const generator = GeneratorFactory.createInstance(settings);
+					const similarity = await generator.shortOrLongAnswerSimilarity(userAnswer.trim(), question.answer);
+					correct = similarity >= 0.7; // 70% threshold
+				} catch (error) {
+					console.error("Error evaluating short/long answer:", error);
+					correct = false;
+				}
+			}
+			
+			results.push({ questionIndex: originalIndex, correct });
+		}
+		
+		return results;
+	};
+	
+	const handleAnswerResult = (correct: boolean, userAnswer?: any) => {
+		const hideResults = settings.showResultsAtEndOnly ?? false;
+		
 		// Stop any currently playing audio when answer is finalized
 		if (elevenLabsRef.current) {
 			elevenLabsRef.current.stopAllAudio();
@@ -955,6 +1340,50 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 			autoProgressRef.current = null;
 		}
 		
+		const originalIndex = activeOriginalIndices[questionIndex];
+		
+		// Store user answer if provided
+		if (userAnswer !== undefined) {
+			// Store in ref immediately (synchronous) so it's available even if navigation happens before state update
+			userAnswersRef.current.set(originalIndex, userAnswer);
+			// Also update state (asynchronous)
+			setUserAnswers(prev => {
+				const newAnswers = new Map(prev);
+				newAnswers.set(originalIndex, userAnswer);
+				return newAnswers;
+			});
+		}
+		
+		if (currentQuestionHash) {
+			updateDraftResponse(currentQuestionHash, null);
+		}
+		
+		// In review-at-end mode, don't store correctness or play sounds until scoring
+		if (hideResults) {
+			// Just mark that this question has been answered (for tracking purposes)
+			// But don't store correctness yet
+			
+			// For fill-in-the-blank and short/long answer questions, navigate to next question after submitting
+			// Use setTimeout to ensure state updates are complete before navigating
+			const currentQuestion = activeQuestions[questionIndex];
+			if (isFillInTheBlank(currentQuestion) || isShortOrLongAnswer(currentQuestion)) {
+				setTimeout(() => {
+					// Navigate to next question or score page
+					if (questionIndex < activeQuestions.length - 1) {
+						setQuestionIndex(questionIndex + 1);
+					} else if (questionIndex === activeQuestions.length - 1) {
+						// Go to score page
+						setShowUnansweredOnly(false);
+						setUnansweredSnapshot(null); // Clear snapshot when exiting unanswered-only mode
+						setQuestionIndex(questionIndex + 1);
+					}
+				}, 100); // Small delay to ensure answer is saved
+			}
+			
+			return;
+		}
+		
+		// Normal mode: store correctness and play sounds immediately
 		// Play sound effect (only if not muted)
 		if (soundManagerRef.current && !soundsMuted) {
 			if (correct) {
@@ -965,7 +1394,6 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 		}
 		
 		const newResults = new Map(quizResults);
-		const originalIndex = activeOriginalIndices[questionIndex];
 		newResults.set(originalIndex, correct);
 		setQuizResults(newResults);
 		
@@ -1001,9 +1429,10 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 		
 		// Auto-progress to next question if enabled (forced on when pagination is disabled)
 		// But skip auto-progress for short and long answer questions
+		// Also skip if we're in review-at-end mode (hideResults) - user should navigate manually
 		const currentQuestion = activeQuestions[questionIndex];
 		const isShortOrLong = currentQuestion && isShortOrLongAnswer(currentQuestion);
-		const shouldAutoProgress = (!gamification.paginationEnabled || gamification.autoProgressEnabled) && !isShortOrLong;
+		const shouldAutoProgress = (!gamification.paginationEnabled || gamification.autoProgressEnabled) && !isShortOrLong && !hideResults;
 		
 		if (shouldAutoProgress && questionIndex < activeQuestions.length - 1) {
 			const progressDelay = (gamification.autoProgressSeconds || 3) * 1000;
@@ -1061,7 +1490,12 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 					correctStreak,
 					() => {
 						handleClose();
-					}
+					},
+					undefined, // failureReason
+					plugin,
+					existingQuizFile,
+					quiz,
+					userAnswers
 				);
 				summaryModal.open();
 			}, 500);
@@ -1075,6 +1509,174 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 			onQuizComplete?.(results, allQuestionHashes, sessionTimestamp);
 		}
 	};
+
+	const endQuizAsFailed = useCallback((reason: string) => {
+		if (quizCompleted || cheatingDetected) return; // Already ended
+		
+		setCheatingDetected(true);
+		
+		// Stop all timers
+		if (timerIntervalRef.current) {
+			clearInterval(timerIntervalRef.current);
+			timerIntervalRef.current = null;
+		}
+		if (questionTimerRef.current) {
+			clearInterval(questionTimerRef.current);
+			questionTimerRef.current = null;
+		}
+		if (tickingIntervalRef.current) {
+			clearInterval(tickingIntervalRef.current);
+			tickingIntervalRef.current = null;
+		}
+		if (autoProgressRef.current) {
+			clearTimeout(autoProgressRef.current);
+			autoProgressRef.current = null;
+		}
+		if (cursorLeaveTimeoutRef.current) {
+			clearTimeout(cursorLeaveTimeoutRef.current);
+			cursorLeaveTimeoutRef.current = null;
+		}
+		if (cursorLeaveCountdownIntervalRef.current) {
+			clearInterval(cursorLeaveCountdownIntervalRef.current);
+			cursorLeaveCountdownIntervalRef.current = null;
+		}
+		
+		// Mark all remaining questions as incorrect
+		const newResults = new Map(quizResults);
+		const hashesToClear: string[] = [];
+		activeQuestions.forEach((_, index) => {
+			const originalIndex = activeOriginalIndices[index];
+			if (!newResults.has(originalIndex)) {
+				newResults.set(originalIndex, false);
+			}
+			const hash = questionHashes[index];
+			if (hash) {
+				hashesToClear.push(hash);
+			}
+		});
+		if (hashesToClear.length > 0) {
+			clearDraftResponses(hashesToClear);
+		}
+		
+		setQuizResults(newResults);
+		setQuizCompleted(true);
+		
+		const finalElapsed = Math.floor((Date.now() - startTimeRef.current) / 1000);
+		setElapsedTime(finalElapsed);
+		
+		// Create results with all questions marked as incorrect
+		const results: QuizResult[] = Array.from(newResults.entries()).map(([index, correct]) => ({
+			questionIndex: index,
+			correct
+		}));
+		
+		const correctCount = results.filter(r => r.correct).length;
+		const totalCount = results.length;
+		
+		// Update streak data
+		const streakData = streakTrackerRef.current.updateStreak(totalCount, correctCount);
+		
+		// Save results
+		onQuizComplete?.(results, allQuestionHashes, sessionTimestamp);
+		
+		// Show summary modal with failure message
+		handleClose();
+
+		setTimeout(() => {
+			const summaryModal = new QuizSummaryModal(
+				app,
+				settings,
+				results,
+				finalElapsed,
+				streakData,
+				0, // No streak on failure
+				() => {},
+				reason, // Pass failure reason
+				plugin,
+				existingQuizFile,
+				quiz,
+				userAnswers
+			);
+			summaryModal.open();
+		}, 500);
+	}, [quizCompleted, cheatingDetected, quizResults, activeQuestions, activeOriginalIndices, allQuestionHashes, sessionTimestamp, onQuizComplete, app, settings, handleClose, streakTrackerRef, clearDraftResponses]);
+
+	// No cheating mode: Window focus/blur detection
+	useEffect(() => {
+		const hideResults = settings.showResultsAtEndOnly ?? false;
+		const isScorePage = hideResults && questionIndex === activeQuestions.length;
+		
+		// Disable no-cheat mode on score page
+		if (!gamification.noCheatingMode || quizCompleted || cheatingDetected || isScorePage) return;
+
+		const handleBlur = () => {
+			endQuizAsFailed("Window lost focus");
+		};
+
+		window.addEventListener('blur', handleBlur);
+
+		return () => {
+			window.removeEventListener('blur', handleBlur);
+		};
+	}, [gamification.noCheatingMode, quizCompleted, cheatingDetected, endQuizAsFailed, settings, questionIndex, activeQuestions.length]);
+
+	// No cheating mode: Cursor tracking
+	useEffect(() => {
+		const hideResults = settings.showResultsAtEndOnly ?? false;
+		const isScorePage = hideResults && questionIndex === activeQuestions.length;
+		
+		// Disable no-cheat mode on score page
+		if (!gamification.noCheatingMode || quizCompleted || cheatingDetected || isScorePage || !modalContainerRef.current) return;
+
+		const modalElement = modalContainerRef.current;
+		
+		const handleMouseLeave = () => {
+			// Start 3 second countdown
+			setCursorLeaveCountdown(3);
+			
+			// Countdown interval
+			cursorLeaveCountdownIntervalRef.current = setInterval(() => {
+				setCursorLeaveCountdown(prev => {
+					if (prev === null || prev <= 1) {
+						return null;
+					}
+					return prev - 1;
+				});
+			}, 1000);
+			
+			// Timeout to fail quiz after 3 seconds
+			cursorLeaveTimeoutRef.current = setTimeout(() => {
+				endQuizAsFailed("Cursor left quiz area");
+			}, 3000);
+		};
+
+		const handleMouseEnter = () => {
+			// Clear countdown and timeout
+			if (cursorLeaveTimeoutRef.current) {
+				clearTimeout(cursorLeaveTimeoutRef.current);
+				cursorLeaveTimeoutRef.current = null;
+			}
+			if (cursorLeaveCountdownIntervalRef.current) {
+				clearInterval(cursorLeaveCountdownIntervalRef.current);
+				cursorLeaveCountdownIntervalRef.current = null;
+			}
+			setCursorLeaveCountdown(null);
+		};
+
+		modalElement.addEventListener('mouseleave', handleMouseLeave);
+		modalElement.addEventListener('mouseenter', handleMouseEnter);
+
+		return () => {
+			modalElement.removeEventListener('mouseleave', handleMouseLeave);
+			modalElement.removeEventListener('mouseenter', handleMouseEnter);
+			if (cursorLeaveTimeoutRef.current) {
+				clearTimeout(cursorLeaveTimeoutRef.current);
+			}
+			if (cursorLeaveCountdownIntervalRef.current) {
+				clearInterval(cursorLeaveCountdownIntervalRef.current);
+			}
+		};
+	}, [gamification.noCheatingMode, quizCompleted, cheatingDetected, endQuizAsFailed, settings, questionIndex, activeQuestions.length]);
 
 	const handleChooseAnswer = () => {
 		// Stop any currently playing audio when an answer is selected
@@ -1224,6 +1826,15 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 		}
 	};
 	
+	const handleShowReview = () => {
+		const results: QuizResult[] = Array.from(quizResults.entries()).map(([index, correct]) => ({
+			questionIndex: index,
+			correct
+		}));
+		const reviewModal = new ReviewModal(app, settings, quiz, results, userAnswers);
+		reviewModal.open();
+	};
+
 	const handleRepeatQuestion = () => {
 		if (gamification.elevenLabsEnabled && elevenLabsRef.current && !voiceMuted) {
 			// Stop any currently playing audio first
@@ -1268,26 +1879,241 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 	};
 
 	const renderQuestion = () => {
+		const hideResults = settings.showResultsAtEndOnly ?? false;
+		
+		// Check if we're on the "Score My Quiz" page (only when hideResults is true and we're past the last question)
+		const isScorePage = hideResults && questionIndex === activeQuestions.length;
+		
+		if (isScorePage) {
+			// Render "Score My Quiz" page
+			// Get all active questions (not filtered by unanswered filter) for counting
+			const allActiveQuestionsForCount = quiz.map((q, idx) => ({
+				originalIndex: idx,
+				hash: allQuestionHashes[idx]
+			})).filter(item => {
+				if (skipCorrect) {
+					const wasCorrect = previousAttempts.get(item.hash);
+					return wasCorrect !== true;
+				}
+				return true;
+			});
+			
+			const allActiveCount = allActiveQuestionsForCount.length;
+			const hideResults = settings.showResultsAtEndOnly ?? false;
+			const unansweredCount = allActiveQuestionsForCount.filter(item => {
+				const question = quiz[item.originalIndex];
+				return !isQuestionAnswered(item.originalIndex, question, item.hash, hideResults);
+			}).length;
+			const hasUnanswered = unansweredCount > 0;
+			
+			return (
+				<div className="question-container-qg" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '300px' }}>
+					{isScoring ? (
+						<div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1em' }}>
+							<div className="loading-spinner-qg" style={{ width: '48px', height: '48px', border: '4px solid var(--background-modifier-border)', borderTop: '4px solid var(--text-accent)', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+							<p style={{ color: 'var(--text-normal)', textAlign: 'center', margin: 0 }}>
+								Calculating scores...
+							</p>
+						</div>
+					) : (
+						<>
+							{hasUnanswered && (
+								<button
+									className="submit-answer-qg"
+									style={{ fontSize: '1em', padding: '0.75em 1.5em', marginTop: '2em', marginBottom: '1em', backgroundColor: 'var(--background-modifier-border)', color: 'var(--text-normal)' }}
+									onClick={() => {
+										// Create snapshot of unanswered questions before entering review mode
+										const allActiveOriginalIndices = quiz.map((q, idx) => ({
+											originalIndex: idx,
+											hash: allQuestionHashes[idx]
+										})).filter(item => {
+											if (skipCorrect) {
+												const wasCorrect = previousAttempts.get(item.hash);
+												return wasCorrect !== true;
+											}
+											return true;
+										}).map(item => item.originalIndex);
+										
+										const hideResults = settings.showResultsAtEndOnly ?? false;
+										const unansweredIndices = new Set(
+											allActiveOriginalIndices.filter(origIdx => {
+												const question = quiz[origIdx];
+												const hash = allQuestionHashes[origIdx];
+												return !isQuestionAnswered(origIdx, question, hash, hideResults);
+											})
+										);
+										
+										setUnansweredSnapshot(unansweredIndices);
+										setShowUnansweredOnly(true);
+										setQuestionIndex(0); // Reset to first unanswered question
+									}}
+								>
+									Review {unansweredCount} unanswered question{unansweredCount !== 1 ? 's' : ''}
+								</button>
+							)}
+							{hasUnanswered && (
+								<p style={{ marginBottom: '1em', color: 'var(--text-muted)', textAlign: 'center', fontSize: '0.9em' }}>
+									{unansweredCount} question{unansweredCount !== 1 ? 's' : ''} left unanswered will be marked as incorrect.
+								</p>
+							)}
+							<button
+								className="submit-answer-qg"
+								style={{ fontSize: '1.2em', padding: '1em 2em', marginTop: hasUnanswered ? '0' : '2em' }}
+								onClick={async () => {
+									if (!isScoring) {
+										setIsScoring(true);
+										
+										try {
+											// Calculate all scores
+											const results = await calculateAllScores();
+											
+											// Store results
+											const resultsMap = new Map<number, boolean>();
+											results.forEach(r => resultsMap.set(r.questionIndex, r.correct));
+											setQuizResults(resultsMap);
+											
+											// Calculate answer order for streak
+											const newAnswerOrder = results.map(r => r.correct);
+											setAnswerOrder(newAnswerOrder);
+											
+											// Calculate streak
+											let finalStreak = 0;
+											if (gamification.enabled && gamification.showStreakCounter) {
+												finalStreak = streakTrackerRef.current.getCurrentCorrectStreak(newAnswerOrder);
+												setCorrectStreak(finalStreak);
+											}
+											
+											const correctCount = results.filter(r => r.correct).length;
+											const totalCount = results.length;
+											const accuracy = totalCount > 0 ? (correctCount / totalCount) * 100 : 0;
+											const passed = accuracy >= 70;
+											
+											// Stop timer
+											if (timerIntervalRef.current) {
+												clearInterval(timerIntervalRef.current);
+											}
+											if (tickingIntervalRef.current) {
+												clearInterval(tickingIntervalRef.current);
+												tickingIntervalRef.current = null;
+											}
+											const finalElapsed = Math.floor((Date.now() - startTimeRef.current) / 1000);
+											setElapsedTime(finalElapsed);
+											
+											// Play celebration if passed
+											if (passed && soundManagerRef.current && !soundsMuted) {
+												soundManagerRef.current.playCelebration();
+												setShowConfetti(true);
+												setTimeout(() => setShowConfetti(false), 3000);
+											}
+											
+											// Update streak data
+											const streakData = streakTrackerRef.current.updateStreak(totalCount, correctCount);
+											
+											// Save results
+											onQuizComplete?.(results, allQuestionHashes, sessionTimestamp);
+											
+											// Show summary modal
+											setTimeout(() => {
+												const summaryModal = new QuizSummaryModal(
+													app,
+													settings,
+													results,
+													finalElapsed,
+													streakData,
+													finalStreak,
+													() => {
+														handleClose();
+													},
+													undefined,
+													plugin,
+													existingQuizFile,
+													quiz,
+													userAnswers
+												);
+												summaryModal.open();
+											}, 500);
+										} catch (error) {
+											console.error("Error calculating scores:", error);
+											new Notice("Error calculating scores. Please try again.");
+											setIsScoring(false);
+										}
+									}
+								}}
+								disabled={isScoring}
+							>
+								Score My Quiz
+							</button>
+						</>
+					)}
+				</div>
+			);
+		}
+		
 		const question = activeQuestions[questionIndex];
 		const originalIndex = activeOriginalIndices[questionIndex];
-		const isAnswered = quizResults.has(originalIndex);
+		const currentHash = questionHashes[questionIndex];
+		// In review-at-end mode, check if user has answered (including draft text for text input questions)
+		// In normal mode, check quiz results
+		const isAnswered = hideResults 
+			? isQuestionAnswered(originalIndex, question, currentHash, hideResults)
+			: quizResults.has(originalIndex);
 		// Use a unique key that includes the original index and skipCorrect state to force remount when filter changes
 		const uniqueKey = `${originalIndex}-${skipCorrect}-${questionIndex}`;
 		
 		const showRepeat = gamification.elevenLabsEnabled && !voiceMuted;
+		const draftValue = currentHash ? draftResponses[currentHash] : undefined;
+		// Check ref first (immediate) then fall back to state (may be async)
+		const savedUserAnswer = userAnswersRef.current.get(originalIndex) ?? userAnswers.get(originalIndex);
 		
 		if (isTrueFalse(question)) {
-			return <TrueFalseQuestion key={uniqueKey} app={app} question={question} onAnswer={handleAnswerResult} onChoose={handleChooseAnswer} answered={isAnswered} onRepeat={handleRepeatQuestion} showRepeat={showRepeat} />;
+			return <TrueFalseQuestion key={uniqueKey} app={app} question={question} onAnswer={handleAnswerResult} onChoose={handleChooseAnswer} answered={isAnswered} onRepeat={handleRepeatQuestion} showRepeat={showRepeat} hideResults={hideResults} savedUserAnswer={savedUserAnswer} />;
 		} else if (isMultipleChoice(question)) {
-			return <MultipleChoiceQuestion key={uniqueKey} app={app} question={question} onAnswer={handleAnswerResult} onChoose={handleChooseAnswer} answered={isAnswered} onRepeat={handleRepeatQuestion} showRepeat={showRepeat} />;
+			return <MultipleChoiceQuestion key={uniqueKey} app={app} question={question} onAnswer={handleAnswerResult} onChoose={handleChooseAnswer} answered={isAnswered} onRepeat={handleRepeatQuestion} showRepeat={showRepeat} hideResults={hideResults} savedUserAnswer={savedUserAnswer} />;
 		} else if (isSelectAllThatApply(question)) {
-			return <SelectAllThatApplyQuestion key={uniqueKey} app={app} question={question} onAnswer={handleAnswerResult} onChoose={handleChooseAnswer} answered={isAnswered} onRepeat={handleRepeatQuestion} showRepeat={showRepeat} />;
+			return <SelectAllThatApplyQuestion key={uniqueKey} app={app} question={question} onAnswer={handleAnswerResult} onChoose={handleChooseAnswer} answered={isAnswered} onRepeat={handleRepeatQuestion} showRepeat={showRepeat} hideResults={hideResults} savedUserAnswer={savedUserAnswer} />;
 		} else if (isFillInTheBlank(question)) {
-			return <FillInTheBlankQuestion key={uniqueKey} app={app} question={question} onAnswer={handleAnswerResult} onChoose={handleChooseAnswer} answered={isAnswered} onRepeat={handleRepeatQuestion} showRepeat={showRepeat} />;
+			return (
+				<FillInTheBlankQuestion
+					key={uniqueKey}
+					app={app}
+					question={question}
+					onAnswer={handleAnswerResult}
+					onChoose={handleChooseAnswer}
+					answered={isAnswered}
+					onRepeat={handleRepeatQuestion}
+					showRepeat={showRepeat}
+					hideResults={hideResults}
+					savedInputs={Array.isArray(draftValue) ? draftValue : undefined}
+					onDraftChange={(values) => {
+						if (currentHash) {
+							updateDraftResponse(currentHash, values);
+						}
+					}}
+				/>
+			);
 		} else if (isMatching(question)) {
-			return <MatchingQuestion key={uniqueKey} app={app} question={question} onAnswer={handleAnswerResult} onChoose={handleChooseAnswer} answered={isAnswered} onRepeat={handleRepeatQuestion} showRepeat={showRepeat} />;
+			return <MatchingQuestion key={uniqueKey} app={app} question={question} onAnswer={handleAnswerResult} onChoose={handleChooseAnswer} answered={isAnswered} onRepeat={handleRepeatQuestion} showRepeat={showRepeat} hideResults={hideResults} savedUserAnswer={savedUserAnswer} />;
 		} else if (isShortOrLongAnswer(question)) {
-			return <ShortOrLongAnswerQuestion key={uniqueKey} app={app} question={question} settings={settings} onAnswer={handleAnswerResult} onChoose={handleChooseAnswer} answered={isAnswered} onRepeat={handleRepeatQuestion} showRepeat={showRepeat} />;
+			return (
+				<ShortOrLongAnswerQuestion
+					key={uniqueKey}
+					app={app}
+					question={question}
+					settings={settings}
+					onAnswer={handleAnswerResult}
+					onChoose={handleChooseAnswer}
+					answered={isAnswered}
+					onRepeat={handleRepeatQuestion}
+					showRepeat={showRepeat}
+					hideResults={hideResults}
+					savedInput={typeof draftValue === "string" ? draftValue : ""}
+					onDraftChange={(value) => {
+						if (currentHash) {
+							updateDraftResponse(currentHash, value);
+						}
+					}}
+				/>
+			);
 		}
 	};
 
@@ -1306,8 +2132,9 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 		return 1;
 	};
 	
-	const showFlameEffect = gamification.enabled && gamification.enableFlameEffect && correctStreak >= 5;
-	const glowIntensity = gamification.enabled && gamification.showStreakCounter 
+	const hideResults = settings.showResultsAtEndOnly ?? false;
+	const showFlameEffect = !hideResults && gamification.enabled && gamification.enableFlameEffect && correctStreak >= 5;
+	const glowIntensity = !hideResults && gamification.enabled && gamification.showStreakCounter 
 		? getStreakGlowIntensity(correctStreak) 
 		: 0;
 
@@ -1316,21 +2143,33 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 			<ConfettiEffect active={showConfetti} duration={3000} />
 			<div className="modal-bg" style={{opacity: 0.85}} onClick={handleClose} />
 			<div 
-				className={`modal modal-qg ${showFlameEffect ? 'flame-effect-qg' : ''}`}
+				className={`modal modal-qg ${showFlameEffect ? 'flame-effect-qg' : ''} ${gamification.noCheatingMode ? 'no-cheating-mode-qg' : ''}`}
 				ref={modalContainerRef}
 			>
+				{cursorLeaveCountdown !== null && gamification.noCheatingMode && (
+					<div className="cursor-leave-countdown-qg">
+						<div className="countdown-number-qg">{cursorLeaveCountdown}</div>
+						<div className="countdown-message-qg">Return cursor to quiz or quiz will fail!</div>
+					</div>
+				)}
 				<div className="modal-close-button" onClick={handleClose} />
 				<div className="modal-header">
 					<div className="modal-title modal-title-qg">
-						Question {questionIndex + 1} of {activeQuestions.length}
-						{skipCorrect && ` (${quiz.length} total)`}
-						{(() => {
-							const currentHash = questionHashes[questionIndex];
-							const wrongCount = questionWrongCounts?.get(currentHash);
-							return wrongCount !== undefined && wrongCount > 0 ? (
-								<span className="wrong-count-badge-qg">Wrong {wrongCount}x</span>
-							) : null;
-						})()}
+						{showWrongBadge ? (
+							<span className="wrong-count-badge-qg">Wrong {wrongCountForQuestion}x</span>
+						) : showSkipInline ? (
+							<label className="skip-inline-toggle-qg">
+								<input
+									type="checkbox"
+									checked={skipCorrect}
+									onChange={(e) => {
+										setSkipCorrect(e.target.checked);
+										setQuestionIndex(0);
+									}}
+								/>
+								<span>Skip questions I've gotten right</span>
+							</label>
+						) : null}
 					</div>
 					<div className="quiz-controls-top-right-qg">
 						{existingQuizFile && plugin && (
@@ -1358,13 +2197,6 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 							className="quiz-mute-btn-qg"
 							onClick={handleToggleSounds}
 						/>
-						{gamification.elevenLabsEnabled && (
-							<button
-								ref={voiceMuteButtonRef}
-								className="quiz-mute-btn-qg"
-								onClick={handleToggleVoice}
-							/>
-						)}
 					</div>
 					{gamification.enabled && (
 						<div className="gamification-header-qg">
@@ -1373,7 +2205,7 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 									⏰ {questionTimer}s
 								</div>
 							)}
-							{gamification.showStreakCounter && correctStreak > 0 && (
+							{!hideResults && gamification.showStreakCounter && correctStreak > 0 && (
 								<div 
 									className="streak-counter-qg" 
 									style={{
@@ -1393,82 +2225,84 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 					)}
 				</div>
 				<div className="modal-content modal-content-flex-qg">
-					{hasBeenTaken && (
-						<div className="skip-correct-container-qg">
-							<label className="skip-correct-label-qg">
-								<input
-									type="checkbox"
-									checked={skipCorrect}
-									onChange={(e) => {
-										setSkipCorrect(e.target.checked);
-										setQuestionIndex(0); // Reset to first question when toggling
-									}}
-								/>
-								<span>Skip questions I've gotten right</span>
-							</label>
-						</div>
-					)}
 					<div className="question-content-wrapper-qg">
 						{renderQuestion()}
 					</div>
-					<div className="modal-button-container-qg">
+					{gamification.noCheatingMode && (
+						<div className="quiz-delete-button-bottom-left-qg">
+							<ModalButton
+								icon="trash-2"
+								tooltip="Delete this question"
+								onClick={handleDeleteQuestion}
+								disabled={activeQuestions.length <= 1}
+							/>
+						</div>
+					)}
+					{settings.hintsEnabled && (() => {
+						// Check if there's a cached hint for the current question
+						const currentHash = questionHashes[questionIndex];
+						const hasCachedHint = hintCacheRef.current.has(currentHash);
+						const maxHints = settings.gamification?.maxHintsPerQuiz ?? null;
+						const maxHintsReached = maxHints !== null && hintsUsed >= maxHints;
+						// Disable only if generating OR (max hints reached AND no cached hint available)
+						const isDisabled = generatingHint || (maxHintsReached && !hasCachedHint);
+						
+						return (
+							<div className="quiz-hint-button-bottom-right-qg">
+								<button
+									ref={hintButtonRef}
+									className="quiz-hint-button-qg"
+									onClick={handleRequestHint}
+									disabled={isDisabled}
+									title={generatingHint ? "Generating hint..." : `Hint${maxHints !== null ? ` (${hintsUsed}/${maxHints} used)` : ""}`}
+								/>
+							</div>
+						);
+					})()}
+					{/* Question counter with pagination */}
+					<div className="quiz-question-counter-bottom-qg">
 						{gamification.paginationEnabled && (
-						<ModalButton
-							icon="arrow-left"
-							tooltip="Back"
-							onClick={handlePreviousQuestion}
-							disabled={questionIndex === 0}
-						/>
-						)}
-						<ModalButton
-							icon="trash-2"
-							tooltip="Delete this question"
-							onClick={handleDeleteQuestion}
-							disabled={activeQuestions.length <= 1}
-						/>
-						<ModalButton
-							icon="message-square"
-							tooltip="Conversation Mode - ChatGPT"
-							onClick={() => {
-								// Access plugin instance - plugin should be passed as prop
-								const pluginInstance = plugin || (app.plugins.plugins as Record<string, QuizGenerator | undefined>)["obsidian-quiz-generator"];
-								if (!pluginInstance) {
-									new Notice("Plugin instance not available");
-									return;
+							<button
+								className="quiz-pagination-button-qg"
+								onClick={handlePreviousQuestion}
+								disabled={hideResults ? questionIndex === 0 : questionIndex === 0}
+								title={
+									hideResults && questionIndex === activeQuestions.length
+										? "Go back to last question"
+										: questionIndex === 0
+										? "At first question"
+										: "Previous question"
 								}
-								const modal = new ConversationModeModal(app, activeQuestions, settings, pluginInstance);
-								
-								// Pause timers when modal opens
-								conversationModalPausedAtRef.current = Date.now();
-								
-								// Override modal's onClose to resume timers
-								const originalOnClose = modal.onClose;
-								modal.onClose = () => {
-									// Resume timers
-									if (conversationModalPausedAtRef.current !== null) {
-										const pausedDuration = Date.now() - conversationModalPausedAtRef.current;
-										conversationModalPausedTimeRef.current += pausedDuration;
-										
-										// Question timer doesn't need adjustment since we prevent decrementing when paused
-										// It will continue from where it left off automatically
-										
-										conversationModalPausedAtRef.current = null;
-									}
-									
-									// Call original onClose
-									originalOnClose.call(modal);
-								};
-								
-								modal.open();
-							}}
-						/>
+							>
+								←
+							</button>
+						)}
+						<span className="quiz-counter-text-qg">
+							{hideResults && questionIndex === activeQuestions.length ? (
+								"Score My Quiz"
+							) : (
+								<>
+									Question {questionIndex + 1} of {activeQuestions.length}
+									{skipCorrect && ` (${quiz.length} total)`}
+									{showUnansweredOnly && ` (unanswered only)`}
+								</>
+							)}
+						</span>
 						{gamification.paginationEnabled && (
-						<ModalButton
-							icon="arrow-right"
-							tooltip="Next"
-							onClick={handleNextQuestion}
-								disabled={questionIndex === activeQuestions.length - 1}
-						/>
+							<button
+								className="quiz-pagination-button-qg"
+								onClick={handleNextQuestion}
+								disabled={hideResults ? questionIndex >= activeQuestions.length : questionIndex === activeQuestions.length - 1}
+								title={
+									hideResults && questionIndex === activeQuestions.length - 1
+										? "Go to Score My Quiz"
+										: questionIndex === activeQuestions.length - 1
+										? "At last question"
+										: "Next question"
+								}
+							>
+								→
+							</button>
 						)}
 					</div>
 				</div>

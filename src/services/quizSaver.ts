@@ -19,20 +19,40 @@ export default class QuizSaver {
 	private readonly validSavePath: boolean;
 	private readonly existingQuizFile?: TFile;
 	private readonly contentSelectionMode?: string; // "full" or "changes"
+	private readonly quizTitle?: string | null; // Custom quiz title
 
-	constructor(app: App, settings: QuizSettings, quizSources: TFile[], existingQuizFile?: TFile, contentSelectionMode?: string) {
+	constructor(app: App, settings: QuizSettings, quizSources: TFile[], existingQuizFile?: TFile, contentSelectionMode?: string, quizTitle?: string | null) {
 		this.app = app;
 		this.settings = settings;
 		this.quizSources = quizSources;
 		this.existingQuizFile = existingQuizFile;
 		this.contentSelectionMode = contentSelectionMode;
+		this.quizTitle = quizTitle;
 		this.saveFilePath = existingQuizFile?.path ?? this.getSaveFilePath();
 		this.validSavePath = this.app.vault.getAbstractFileByPath(this.settings.savePath) instanceof TFolder;
 	}
 
 	public async saveQuestion(question: Question): Promise<void> {
 		const saveFile = await this.getSaveFile();
-		await this.app.vault.append(saveFile, this.createCalloutQuestion(question));
+		const questionBlock = this.createCalloutQuestion(question);
+		const existingContent = await this.app.vault.read(saveFile);
+		const frontmatterInfo = getFrontMatterInfo(existingContent);
+		const body = frontmatterInfo.exists
+			? existingContent.slice(frontmatterInfo.contentStart)
+			: existingContent;
+		const hasBodyContent = body.trim().length > 0;
+
+		if (!hasBodyContent) {
+			const descriptionLine = this.generateQuizDescription([question]);
+			const descriptionBlock = descriptionLine ? `${descriptionLine}\n\n` : "";
+			let prefix = existingContent;
+			if (prefix.length > 0 && !prefix.endsWith("\n")) {
+				prefix += "\n";
+			}
+			await this.app.vault.modify(saveFile, `${prefix}${descriptionBlock}${questionBlock}`);
+		} else {
+			await this.app.vault.append(saveFile, questionBlock);
+		}
 
 		if (this.validSavePath) {
 			new Notice("Question saved");
@@ -48,19 +68,29 @@ export default class QuizSaver {
 		for (const question of questions) {
 			quiz.push(this.createCalloutQuestion(question));
 		}
+		const descriptionLine = this.generateQuizDescription(questions);
+		const descriptionBlock = descriptionLine ? `${descriptionLine}\n\n` : "";
 
 		// Get save file (this will ensure contentSelectionMode is in frontmatter if provided)
 		const saveFile = await this.getSaveFile();
 		
 		// If file already exists and has content, we need to append, otherwise create with content
 		const existingContent = await this.app.vault.read(saveFile);
-		if (existingContent.trim().length === 0 || existingContent.trim() === "---\n---" || existingContent.trim().startsWith("---\n")) {
-			// File is empty or only has frontmatter, write the quiz content
-			const quizContent = quiz.join("");
-			await this.app.vault.modify(saveFile, existingContent + (existingContent.endsWith("\n") ? "" : "\n") + quizContent);
+		const frontmatterInfo = getFrontMatterInfo(existingContent);
+		const body = frontmatterInfo.exists
+			? existingContent.slice(frontmatterInfo.contentStart)
+			: existingContent;
+		const hasBodyContent = body.trim().length > 0;
+		const quizContent = quiz.join("");
+
+		if (!hasBodyContent) {
+			let prefix = existingContent;
+			if (prefix.length > 0 && !prefix.endsWith("\n")) {
+				prefix += "\n";
+			}
+			await this.app.vault.modify(saveFile, `${prefix}${descriptionBlock}${quizContent}`);
 		} else {
-			// File has content, append
-			await this.app.vault.append(saveFile, quiz.join(""));
+			await this.app.vault.append(saveFile, quizContent);
 		}
 		
 		if (this.validSavePath) {
@@ -302,6 +332,33 @@ export default class QuizSaver {
 	}
 
 	private getSaveFilePath(): string {
+		// Use custom title if provided
+		if (this.quizTitle && this.quizTitle.trim()) {
+			const sanitizedTitle = this.sanitizeFileName(this.quizTitle.trim());
+			const saveFolder = this.app.vault.getAbstractFileByPath(this.settings.savePath);
+			const validSavePath = saveFolder instanceof TFolder;
+			const basePath = validSavePath ? normalizePath(`${this.settings.savePath}/${sanitizedTitle}.md`) : `${sanitizedTitle}.md`;
+			
+			// Check if file exists, if so append number
+			const existingFile = this.app.vault.getAbstractFileByPath(basePath);
+			if (!(existingFile instanceof TFile)) {
+				return basePath;
+			}
+			
+			// File exists, append number
+			let count = 1;
+			let newPath = basePath;
+			while (this.app.vault.getAbstractFileByPath(newPath) instanceof TFile) {
+				const baseName = sanitizedTitle.replace(/\.md$/, "");
+				newPath = validSavePath 
+					? normalizePath(`${this.settings.savePath}/${baseName} ${count}.md`) 
+					: `${baseName} ${count}.md`;
+				count++;
+			}
+			return newPath;
+		}
+		
+		// Fallback to incremental naming
 		let count = 1;
 		const saveFolder = this.app.vault.getAbstractFileByPath(this.settings.savePath);
 		const validSavePath = saveFolder instanceof TFolder;
@@ -313,27 +370,56 @@ export default class QuizSaver {
 
 		return validSavePath ? normalizePath(`${this.settings.savePath}/Quiz ${count}.md`) : `Quiz ${count}.md`;
 	}
+	
+	private sanitizeFileName(fileName: string): string {
+		// Remove or replace invalid filename characters
+		// Windows: < > : " / \ | ? *
+		// macOS/Linux: /
+		return fileName
+			.replace(/[<>:"/\\|?*]/g, "-")
+			.replace(/\s+/g, " ")
+			.trim()
+			.substring(0, 255); // Limit filename length
+	}
 
 	private async getSaveFile(): Promise<TFile> {
 		const saveFile = this.app.vault.getAbstractFileByPath(this.saveFilePath);
 		
-		// If file exists, ensure frontmatter includes contentSelectionMode if provided
+		// If file exists, ensure frontmatter includes sources and contentSelectionMode if provided
 		if (saveFile instanceof TFile) {
-			if (this.contentSelectionMode) {
-				const content = await this.app.vault.read(saveFile);
-				const frontmatterInfo = getFrontMatterInfo(content);
-				
-				// Check if contentSelectionMode is already in frontmatter
+			const content = await this.app.vault.read(saveFile);
+			const frontmatterInfo = getFrontMatterInfo(content);
+			
+			// Check if we need to add sources or contentSelectionMode
+			const needsSources = this.quizSources.length > 0 && this.settings.quizMaterialProperty;
+			const needsContentMode = !!this.contentSelectionMode;
+			
+			if (needsSources || needsContentMode) {
 				if (frontmatterInfo.exists) {
 					const fmLines = frontmatterInfo.frontmatter.split('\n');
 					const hasContentMode = fmLines.some(line => line.trim().startsWith('quiz_content_mode:'));
+					const sourcesPropertyName = this.settings.quizMaterialProperty || '';
+					const hasSources = sourcesPropertyName && fmLines.some(line => line.trim().startsWith(`${sourcesPropertyName}:`));
 					
-					if (!hasContentMode) {
-						// Add contentSelectionMode to existing frontmatter
+					const updates: string[] = [];
+					
+					// Add sources if missing and needed
+					if (needsSources && !hasSources) {
+						const sourcesProperty = `${sourcesPropertyName}:\n${this.quizSources.map(source => `  - "${this.app.fileManager.generateMarkdownLink(source, this.saveFilePath)}"`).join("\n")}\n`;
+						updates.push(sourcesProperty);
+					}
+					
+					// Add contentSelectionMode if missing and needed
+					if (needsContentMode && !hasContentMode) {
+						updates.push(`quiz_content_mode: ${this.contentSelectionMode}`);
+					}
+					
+					if (updates.length > 0) {
+						// Add updates to existing frontmatter
 						const updatedFrontmatter = [
 							"---",
 							...fmLines.slice(1, -1), // All lines except --- boundaries
-							`quiz_content_mode: ${this.contentSelectionMode}`,
+							...updates,
 							"---"
 						].join('\n');
 						
@@ -341,16 +427,17 @@ export default class QuizSaver {
 						await this.app.vault.modify(saveFile, newContent);
 					}
 				} else {
-					// Add new frontmatter with contentSelectionMode
-					const sourcesProperty = this.settings.quizMaterialProperty
+					// Add new frontmatter with sources and/or contentSelectionMode
+					const sourcesProperty = needsSources
 						? `${this.settings.quizMaterialProperty}:\n${this.quizSources.map(source => `  - "${this.app.fileManager.generateMarkdownLink(source, this.saveFilePath)}"`).join("\n")}\n`
 						: "";
+					const contentModeProperty = needsContentMode ? `quiz_content_mode: ${this.contentSelectionMode}\n` : "";
 					const newFrontmatter = [
 						"---",
 						sourcesProperty,
-						`quiz_content_mode: ${this.contentSelectionMode}`,
+						contentModeProperty,
 						"---\n"
-					].join('\n');
+					].join('');
 					await this.app.vault.modify(saveFile, newFrontmatter + content);
 				}
 			}
@@ -368,6 +455,23 @@ export default class QuizSaver {
 			? `---\n${sourcesProperty}${contentModeProperty}---\n`
 			: "";
 		return await this.app.vault.create(this.saveFilePath, initialContent);
+	}
+
+	private generateQuizDescription(questions: Question[]): string | null {
+		if (this.quizTitle && this.quizTitle.trim().length > 0) {
+			return `About this quiz: ${this.quizTitle.trim()}`;
+		}
+
+		const firstQuestion = questions[0]?.question ?? "";
+		const sanitized = firstQuestion
+			.replace(/`_+`/g, "____")
+			.replace(/\s+/g, " ")
+			.trim();
+
+		if (!sanitized) return null;
+
+		const summary = sanitized.length > 180 ? `${sanitized.slice(0, 177)}…` : sanitized;
+		return `About this quiz: Quiz focus: ${summary}`;
 	}
 
 	private createCalloutQuestion(question: Question): string {

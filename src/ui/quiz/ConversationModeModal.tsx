@@ -46,7 +46,7 @@ export default class ConversationModeModal extends Modal {
 		// Create back button in title bar (insert at beginning)
 		const backBtn = document.createElement("span");
 		backBtn.className = "title-back-button-qg";
-		backBtn.innerHTML = "←";
+		backBtn.textContent = "←";
 		backBtn.title = "Back to Style Selection";
 		
 		// Insert at the beginning of titleEl

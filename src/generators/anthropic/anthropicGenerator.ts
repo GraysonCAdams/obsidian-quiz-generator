@@ -80,6 +80,25 @@ export default class AnthropicGenerator extends Generator {
 		}
 	}
 
+	public async generateRecommendations(incorrectQuestions: Array<{question: string, userAnswer: any, correctAnswer: any, questionType: string}>): Promise<string | null> {
+		try {
+			const recommendationsPrompt = this.createRecommendationsPrompt(incorrectQuestions);
+
+			const response = await this.anthropic.messages.create({
+				model: this.settings.anthropicTextGenModel,
+				system: "You are an academic tutor providing evidence-based study recommendations. Your advice should follow educational principles and learning science.",
+				messages: [
+					{ role: "user", content: recommendationsPrompt },
+				],
+				max_tokens: 500,
+			});
+
+			return response.content[0].type === "text" ? response.content[0].text.trim() : null;
+		} catch (error) {
+			return handleGenerationError(error);
+		}
+	}
+
 	private getMaxTokens(): number {
 		return this.settings.anthropicTextGenModel === AnthropicTextGenModel.CLAUDE_3_5_SONNET ? 8192 : 4096;
 	}

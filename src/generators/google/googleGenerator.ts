@@ -99,4 +99,25 @@ export default class GoogleGenerator extends Generator {
 			return null;
 		}
 	}
+
+	public async generateRecommendations(incorrectQuestions: Array<{question: string, userAnswer: any, correctAnswer: any, questionType: string}>): Promise<string | null> {
+		try {
+			const recommendationsPrompt = this.createRecommendationsPrompt(incorrectQuestions);
+
+			const model = this.google.getGenerativeModel(
+				{
+					model: this.settings.googleTextGenModel,
+					systemInstruction: "You are an academic tutor providing evidence-based study recommendations. Your advice should follow educational principles and learning science.",
+				},
+				{
+					baseUrl: this.settings.googleBaseURL,
+				}
+			);
+			const response = await model.generateContent(recommendationsPrompt);
+
+			return response.response.text()?.trim() || null;
+		} catch (error) {
+			return handleGenerationError(error);
+		}
+	}
 }

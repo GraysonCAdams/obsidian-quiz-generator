@@ -1,4 +1,4 @@
-import { App, Notice, setIcon, setTooltip, TFile, getFrontMatterInfo } from "obsidian";
+import { App, Notice, setIcon, setTooltip, TFile, TAbstractFile, getFrontMatterInfo } from "obsidian";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { QuizSettings } from "../../settings/config";
 import { Question, QuizResult } from "../../utils/types";
@@ -31,7 +31,7 @@ import SelectorModal from "../selector/selectorModal";
 import GeneratorFactory from "../../generators/generatorFactory";
 import ReviewModal from "./ReviewModal";
 
-type DraftResponse = string | string[];
+type DraftResponse = string | string[] | { leftOption: string, rightOption: string }[];
 
 interface QuizModalProps {
 	app: App;
@@ -74,6 +74,7 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 	const [cursorLeaveCountdown, setCursorLeaveCountdown] = useState<number | null>(null);
 	const [cheatingDetected, setCheatingDetected] = useState<boolean>(false);
 	const [draftResponses, setDraftResponses] = useState<Record<string, DraftResponse>>({});
+	const [quizFileName, setQuizFileName] = useState<string | null>(existingQuizFile?.basename ?? null);
 	const userAnswersRef = useRef<Map<number, any>>(new Map()); // Ref to store answers immediately (before state updates)
 	const hintCacheRef = useRef<Map<string, string>>(new Map()); // Cache hints by question hash
 	const hintButtonRef = useRef<HTMLButtonElement>(null);
@@ -98,6 +99,7 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 	const previousCorrectStreakRef = useRef<number>(0); // Track previous streak to detect flame activation
 	const hotkeyOverlayRefs = useRef<Map<string, HTMLDivElement>>(new Map()); // Store overlay elements
 	const modalContainerRef = useRef<HTMLDivElement | null>(null);
+	const currentQuizFilePathRef = useRef<string | null>(existingQuizFile?.path ?? null);
 	
 	// Generate hashes for all questions - memoized to prevent recalculation
 	const allQuestionHashes = useMemo(() => quiz.map(q => hashString(JSON.stringify(q))), [quiz]);
@@ -121,18 +123,23 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 			return true;
 		}
 		
-		// In review mode, check if there's draft text for text input questions
+		// In review mode, check if there's draft text for text input questions or incomplete matching pairs
 		if (hideResults) {
 			const draftValue = draftResponses[hash];
 			if (isFillInTheBlank(question)) {
 				// For fill-in-the-blank, check if any input has text
-				if (Array.isArray(draftValue)) {
-					return draftValue.some(val => val && val.trim().length > 0);
+				if (Array.isArray(draftValue) && draftValue.length > 0 && typeof draftValue[0] === 'string') {
+					return (draftValue as string[]).some(val => val && val.trim().length > 0);
 				}
 			} else if (isShortOrLongAnswer(question)) {
 				// For short/long answer, check if there's text
 				if (typeof draftValue === "string") {
 					return draftValue.trim().length > 0;
+				}
+			} else if (isMatching(question)) {
+				// For matching, check if there are any incomplete pairs saved
+				if (Array.isArray(draftValue) && draftValue.length > 0 && typeof draftValue[0] === 'object' && 'leftOption' in draftValue[0]) {
+					return true; // Has some pairs matched, even if not complete
 				}
 			}
 		}
@@ -224,11 +231,23 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 				const { [hash]: _, ...rest } = prev;
 				return rest;
 			}
-			const normalizedValue = Array.isArray(value) ? [...value] : value;
+			const normalizedValue: DraftResponse = Array.isArray(value) 
+				? (value as string[] | { leftOption: string, rightOption: string }[]).slice() 
+				: value;
 			const existing = prev[hash];
 			if (Array.isArray(normalizedValue) && Array.isArray(existing)) {
-				if (normalizedValue.length === existing.length && normalizedValue.every((val, index) => val === (existing as string[])[index])) {
-					return prev;
+				// Check if both are string arrays
+				if (normalizedValue.length > 0 && typeof normalizedValue[0] === 'string' && 
+				    existing.length > 0 && typeof existing[0] === 'string') {
+					if (normalizedValue.length === existing.length && normalizedValue.every((val, index) => val === (existing as string[])[index])) {
+						return prev;
+					}
+				} else if (normalizedValue.length > 0 && typeof normalizedValue[0] === 'object' && 'leftOption' in normalizedValue[0] &&
+				           existing.length > 0 && typeof existing[0] === 'object' && 'leftOption' in existing[0]) {
+					// Both are matching pairs arrays - compare by JSON stringify
+					if (JSON.stringify(normalizedValue) === JSON.stringify(existing)) {
+						return prev;
+					}
 				}
 			} else if (!Array.isArray(normalizedValue) && existing === normalizedValue) {
 				return prev;
@@ -1601,6 +1620,32 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 		}, 500);
 	}, [quizCompleted, cheatingDetected, quizResults, activeQuestions, activeOriginalIndices, allQuestionHashes, sessionTimestamp, onQuizComplete, app, settings, handleClose, streakTrackerRef, clearDraftResponses]);
 
+	// Listen for file rename events to update quiz name in top bar
+	useEffect(() => {
+		if (!existingQuizFile) return;
+
+		// Initialize the ref with the current file path
+		currentQuizFilePathRef.current = existingQuizFile.path;
+
+		const handleRename = (file: TAbstractFile, oldPath: string) => {
+			// Check if the renamed file is our quiz file by comparing old path
+			// Also ensure it's a TFile instance
+			if (file instanceof TFile && oldPath === currentQuizFilePathRef.current) {
+				// Update the displayed name and track the new path
+				setQuizFileName(file.basename);
+				currentQuizFilePathRef.current = file.path;
+			}
+		};
+
+		// @ts-ignore - Obsidian's vault.on/off types are not perfectly aligned
+		app.vault.on('rename', handleRename);
+
+		return () => {
+			// @ts-ignore - Obsidian's vault.on/off types are not perfectly aligned
+			app.vault.off('rename', handleRename);
+		};
+	}, [app, existingQuizFile]);
+
 	// No cheating mode: Window focus/blur detection
 	useEffect(() => {
 		const hideResults = settings.showResultsAtEndOnly ?? false;
@@ -1957,7 +2002,7 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 								</p>
 							)}
 							<button
-								className="submit-answer-qg"
+								className="submit-answer-qg score-quiz-button-qg"
 								style={{ fontSize: '1.2em', padding: '1em 2em', marginTop: hasUnanswered ? '0' : '2em' }}
 								onClick={async () => {
 									if (!isScoring) {
@@ -2083,7 +2128,7 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 					onRepeat={handleRepeatQuestion}
 					showRepeat={showRepeat}
 					hideResults={hideResults}
-					savedInputs={Array.isArray(draftValue) ? draftValue : undefined}
+					savedInputs={Array.isArray(draftValue) && (draftValue.length === 0 || typeof draftValue[0] === 'string') ? draftValue as string[] : undefined}
 					onDraftChange={(values) => {
 						if (currentHash) {
 							updateDraftResponse(currentHash, values);
@@ -2092,7 +2137,27 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 				/>
 			);
 		} else if (isMatching(question)) {
-			return <MatchingQuestion key={uniqueKey} app={app} question={question} onAnswer={handleAnswerResult} onChoose={handleChooseAnswer} answered={isAnswered} onRepeat={handleRepeatQuestion} showRepeat={showRepeat} hideResults={hideResults} savedUserAnswer={savedUserAnswer} />;
+			const savedDraftPairs = Array.isArray(draftValue) && draftValue.length > 0 && typeof draftValue[0] === 'object' && 'leftOption' in draftValue[0]
+				? draftValue as { leftOption: string, rightOption: string }[]
+				: undefined;
+			return <MatchingQuestion 
+				key={uniqueKey} 
+				app={app} 
+				question={question} 
+				onAnswer={handleAnswerResult} 
+				onChoose={handleChooseAnswer} 
+				answered={isAnswered} 
+				onRepeat={handleRepeatQuestion} 
+				showRepeat={showRepeat} 
+				hideResults={hideResults} 
+				savedUserAnswer={savedUserAnswer}
+				onDraftChange={(pairs) => {
+					if (currentHash) {
+						updateDraftResponse(currentHash, pairs.length > 0 ? pairs : null);
+					}
+				}}
+				savedDraftPairs={savedDraftPairs}
+			/>;
 		} else if (isShortOrLongAnswer(question)) {
 			return (
 				<ShortOrLongAnswerQuestion
@@ -2169,6 +2234,8 @@ const QuizModal = ({ app, settings, quiz: initialQuiz, quizSaver, reviewing, has
 								/>
 								<span>Skip questions I've gotten right</span>
 							</label>
+						) : quizFileName ? (
+							<span className="quiz-file-name-qg">{quizFileName}</span>
 						) : null}
 					</div>
 					<div className="quiz-controls-top-right-qg">

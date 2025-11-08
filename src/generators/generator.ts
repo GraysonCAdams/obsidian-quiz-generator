@@ -15,6 +15,8 @@ export default abstract class Generator {
 	
 	public abstract generateQuizTitle(contents: string[], titlePrompt?: string | null): Promise<string | null>;
 
+	public abstract generateRecommendations(incorrectQuestions: Array<{question: string, userAnswer: any, correctAnswer: any, questionType: string}>): Promise<string | null>;
+
 	protected systemPrompt(): string {
 		const trueFalseFormat = `"question": The question (DO NOT include "(True or False)" or similar text in the question - the question type is already known)\n"answer": A boolean representing the answer\n`;
 		const multipleChoiceFormat = `"question": The question\n"options": An array of 4 to 26 strings representing the choices\n` +
@@ -210,5 +212,29 @@ ${contentPreview}
 
 Provide only the title text (no quotes, no "Title:" prefix, just the title itself). Keep it under 60 characters if possible.`;
 		}
+	}
+
+	protected createRecommendationsPrompt(incorrectQuestions: Array<{question: string, userAnswer: any, correctAnswer: any, questionType: string}>): string {
+		const questionsText = incorrectQuestions.map((item, index) => {
+			const userAnswerText = this.formatAnswerForHint(item.userAnswer);
+			const correctAnswerText = this.formatAnswerForHint(item.correctAnswer);
+			return `${index + 1}. Question: ${item.question}
+   Type: ${item.questionType}
+   Your Answer: ${userAnswerText}
+   Correct Answer: ${correctAnswerText}`;
+		}).join("\n\n");
+
+		return `You are an academic tutor speaking directly to the quiz taker. Analyze the following questions they answered incorrectly and craft concise, targeted guidance.
+
+Your response must:
+- Address the quiz taker as "you" and never refer to them in the third person.
+- Focus on the exact topics or concepts involved in the incorrect answers, pointing out what to review or practice.
+- Offer short, concrete next steps linked to those concepts without giving lengthy or generic study plans.
+- Stay within 2 or 3 paragraphs, each no more than 3 sentences.
+
+Incorrect Questions:
+${questionsText}
+
+Provide the guidance in second person, emphasizing actionable review or practice tied to the missed material. Avoid filler language, generic productivity tips, or overly prescriptive multi-step routines.`;
 	}
 }

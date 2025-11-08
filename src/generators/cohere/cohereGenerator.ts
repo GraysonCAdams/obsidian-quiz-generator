@@ -80,4 +80,20 @@ export default class CohereGenerator extends Generator {
 			return null;
 		}
 	}
+
+	public async generateRecommendations(incorrectQuestions: Array<{question: string, userAnswer: any, correctAnswer: any, questionType: string}>): Promise<string | null> {
+		try {
+			const recommendationsPrompt = this.createRecommendationsPrompt(incorrectQuestions);
+
+			const response = await this.cohere.chat({
+				model: this.settings.cohereTextGenModel,
+				preamble: "You are an academic tutor providing evidence-based study recommendations. Your advice should follow educational principles and learning science.",
+				message: recommendationsPrompt,
+			});
+
+			return response.text?.trim() || null;
+		} catch (error) {
+			return handleGenerationError(error);
+		}
+	}
 }

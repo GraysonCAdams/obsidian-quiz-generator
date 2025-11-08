@@ -16,13 +16,15 @@ export default class ConversationModeModal extends Modal {
 	private readonly questions: Question[];
 	private readonly settings: QuizSettings;
 	private readonly plugin: QuizGenerator;
+	private readonly extraContext?: string;
 	private selectedStyle: ConversationStyle | null = null;
 
-	constructor(app: App, questions: Question[], settings: QuizSettings, plugin: QuizGenerator) {
+	constructor(app: App, questions: Question[], settings: QuizSettings, plugin: QuizGenerator, extraContext?: string) {
 		super(app);
 		this.questions = questions;
 		this.settings = settings;
 		this.plugin = plugin;
+		this.extraContext = extraContext;
 		this.modalEl.addClass("conversation-mode-modal-qg");
 	}
 
@@ -437,6 +439,10 @@ Let's have a natural conversation where I explain my understanding, you listen a
 		}
 		
 		let basePrompt = this.selectedStyle.prompt;
+
+		if (this.extraContext && this.extraContext.trim().length > 0) {
+			basePrompt += `\n\n### Study Recommendations and Context\n${this.extraContext.trim()}`;
+		}
 		
 		// Format questions
 		const questionsText = this.formatQuestionsForPrompt();
@@ -525,6 +531,10 @@ Let's have a natural conversation where I explain my understanding, you listen a
 		}
 		
 		let basePrompt = this.selectedStyle.prompt;
+
+		if (this.extraContext && this.extraContext.trim().length > 0) {
+			basePrompt += `\n\n### Study Recommendations and Context\n${this.extraContext.trim()}`;
+		}
 		
 		// Format questions with redacted answers
 		const questionsText = this.formatQuestionsForPrompt(true);

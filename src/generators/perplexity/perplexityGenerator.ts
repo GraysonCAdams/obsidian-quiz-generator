@@ -78,4 +78,24 @@ export default class PerplexityGenerator extends Generator {
 			return null;
 		}
 	}
+
+	public async generateRecommendations(incorrectQuestions: Array<{question: string, userAnswer: any, correctAnswer: any, questionType: string}>): Promise<string | null> {
+		try {
+			const recommendationsPrompt = this.createRecommendationsPrompt(incorrectQuestions);
+
+			const response = await this.perplexity.chat.completions.create({
+				model: this.settings.perplexityTextGenModel,
+				messages: [
+					{ role: "system", content: "You are an academic tutor providing evidence-based study recommendations. Your advice should follow educational principles and learning science." },
+					{ role: "user", content: recommendationsPrompt },
+				],
+				max_tokens: 500,
+				temperature: 0.7,
+			});
+
+			return response.choices[0].message.content?.trim() || null;
+		} catch (error) {
+			return handleGenerationError(error);
+		}
+	}
 }

@@ -387,9 +387,9 @@ export default class QuizSaver {
 		
 		// If file exists, ensure frontmatter includes sources and contentSelectionMode if provided
 		if (saveFile instanceof TFile) {
-			const content = await this.app.vault.read(saveFile);
-			const frontmatterInfo = getFrontMatterInfo(content);
-			
+				const content = await this.app.vault.read(saveFile);
+				const frontmatterInfo = getFrontMatterInfo(content);
+				
 			// Check if we need to add sources or contentSelectionMode
 			const needsSources = this.quizSources.length > 0 && this.settings.quizMaterialProperty;
 			const needsContentMode = !!this.contentSelectionMode;

@@ -4,6 +4,16 @@ import { QuizResult, Question } from "../../utils/types";
 import { StreakData } from "../../services/streakTracker";
 import type QuizGenerator from "../../main";
 import ReviewModal from "./ReviewModal";
+import RecommendationsModal from "./RecommendationsModal";
+import GeneratorFactory from "../../generators/generatorFactory";
+import {
+	isTrueFalse,
+	isMultipleChoice,
+	isSelectAllThatApply,
+	isFillInTheBlank,
+	isMatching,
+	isShortOrLongAnswer
+} from "../../utils/typeGuards";
 
 export default class QuizSummaryModal extends Modal {
 	private readonly settings: QuizSettings;
@@ -19,6 +29,8 @@ export default class QuizSummaryModal extends Modal {
 	private readonly totalQuestions: number;
 	private readonly quiz?: Question[];
 	private readonly userAnswers?: Map<number, any>;
+	private cachedRecommendations: string | null = null;
+	private cachedMissedQuestions: Array<{ question: Question; userAnswer: any }> | null = null;
 
 	constructor(
 		app: App,
@@ -119,30 +131,42 @@ export default class QuizSummaryModal extends Modal {
 		
 		// Title
 		if (this.failureReason) {
-			card.createEl("h2", { text: "Quiz Failed" });
+			// Add failure-specific styling class
+			card.addClass("quiz-failure-card-qg");
+			
+			// Create header container with icon
+			const failureHeader = card.createDiv("quiz-failure-header-qg");
+			const iconContainer = failureHeader.createDiv("quiz-failure-icon-qg");
+			setIcon(iconContainer, "x-circle");
+			
+			const titleContainer = failureHeader.createDiv("quiz-failure-title-container-qg");
+			titleContainer.createEl("h2", { text: "Quiz Failed", cls: "quiz-failure-title-qg" });
+			
+			// Create failure reason container with better styling
 			const failureReasonDiv = card.createDiv("quiz-failure-reason-qg");
-			failureReasonDiv.style.color = "var(--text-error)";
-			failureReasonDiv.style.fontWeight = "bold";
-			failureReasonDiv.style.marginTop = "0.5em";
-			failureReasonDiv.style.marginBottom = "0.5em";
 			
-			// Create failure reason text with explanation
-			const reasonText = failureReasonDiv.createSpan();
-			reasonText.textContent = `Reason: ${this.failureReason}. `;
+			// Reason label
+			const reasonLabel = failureReasonDiv.createDiv("quiz-failure-reason-label-qg");
+			reasonLabel.createSpan({ text: "Reason" });
 			
-			// Add explanation about cheat mode
-			const explanationText = failureReasonDiv.createSpan();
+			// Reason value
+			const reasonValue = failureReasonDiv.createDiv("quiz-failure-reason-value-qg");
+			reasonValue.textContent = this.failureReason;
+			
+			// Explanation section
+			const explanationDiv = card.createDiv("quiz-failure-explanation-qg");
+			const explanationIcon = explanationDiv.createSpan("quiz-failure-explanation-icon-qg");
+			setIcon(explanationIcon, "info");
+			const explanationText = explanationDiv.createSpan("quiz-failure-explanation-text-qg");
 			explanationText.textContent = "No cheating mode is enabled in settings. ";
 			
 			// Add link to settings
 			if (this.plugin) {
-				const settingsLink = failureReasonDiv.createEl("a", {
+				const settingsLink = explanationDiv.createEl("a", {
 					text: "Open settings to manage this.",
-					href: "#"
+					href: "#",
+					cls: "quiz-failure-settings-link-qg"
 				});
-				settingsLink.style.color = "var(--text-accent)";
-				settingsLink.style.textDecoration = "underline";
-				settingsLink.style.cursor = "pointer";
 				settingsLink.addEventListener("click", (e) => {
 					e.preventDefault();
 					this.close();
@@ -151,15 +175,16 @@ export default class QuizSummaryModal extends Modal {
 					(this.app as any).setting.openTabById("obsidian-quiz-generator");
 				});
 			} else {
-				const settingsText = failureReasonDiv.createSpan();
+				const settingsText = explanationDiv.createSpan("quiz-failure-settings-text-qg");
 				settingsText.textContent = "Go to plugin settings → Gamification → Advanced to disable 'No cheating mode'.";
-				settingsText.style.fontSize = "0.9em";
 			}
 		} else {
 			card.createEl("h2", { text: "Quiz Complete! 🎉" });
 		}
 		
 		// Star Rating (automatic, based on accuracy)
+		const passedQuiz = accuracy >= 70;
+
 		if (gamification.showStarRating) {
 			const ratingContainer = card.createDiv("summary-rating-container-qg");
 			ratingContainer.createEl("div", { text: "Performance Rating:", cls: "summary-label-qg" });
@@ -204,15 +229,29 @@ export default class QuizSummaryModal extends Modal {
 		// More details section (collapsible)
 		await this.renderMoreDetails(card, gamification, formatTime, correct, total);
 		
+		// Share button - positioned in corner as secondary action
+		const shareButton = card.createEl("button", {
+			cls: "mod-secondary share-results-btn-qg"
+		});
+		const shareIcon = shareButton.createSpan({ cls: "share-icon-qg" });
+		setIcon(shareIcon, "share-2");
+		shareButton.createSpan({ text: "Share" });
+		
+		shareButton.addEventListener("click", () => {
+			this.shareResults(card, gamification, accuracy, formatTime(this.elapsedTime));
+		});
+		
 		// Button container with spacing
 		const buttonContainer = card.createDiv("summary-buttons-container-qg");
 		
-		// Review button (if quiz and userAnswers are available)
+		// Review button (if quiz and userAnswers are available) - primary action
 		if (this.quiz && this.userAnswers) {
 			const reviewButton = buttonContainer.createEl("button", {
-				text: "Review",
-				cls: "mod-cta"
+				cls: "mod-cta review-button-qg summary-action-button-qg"
 			});
+			const reviewIcon = reviewButton.createSpan({ cls: "review-icon-qg" });
+			setIcon(reviewIcon, "eye");
+			reviewButton.createSpan({ text: "Review" });
 			
 			reviewButton.addEventListener("click", () => {
 				const reviewModal = new ReviewModal(
@@ -224,27 +263,21 @@ export default class QuizSummaryModal extends Modal {
 				);
 				reviewModal.open();
 			});
+
+			// Recommendations button - show only when quiz was failed normally (no failure reason)
+			if (!passedQuiz && !this.failureReason) {
+				const recommendationsButton = buttonContainer.createEl("button", {
+					cls: "mod-secondary recommendations-button-qg summary-action-button-qg"
+				});
+				const recommendationsIcon = recommendationsButton.createSpan({ cls: "recommendations-icon-qg" });
+				setIcon(recommendationsIcon, "brain");
+				recommendationsButton.createSpan({ text: "Recommendations" });
+				
+				recommendationsButton.addEventListener("click", async () => {
+					await this.generateAndShowRecommendations();
+				});
+			}
 		}
-		
-		// Share button
-		const shareButton = buttonContainer.createEl("button", {
-			text: "📸 Share Results",
-			cls: "mod-cta share-results-btn-qg"
-		});
-		
-		shareButton.addEventListener("click", () => {
-			this.shareResults(card, gamification, accuracy, formatTime(this.elapsedTime));
-		});
-		
-		// Close button
-		const closeButton = buttonContainer.createEl("button", {
-			text: "Close",
-			cls: "mod-secondary"
-		});
-		
-		closeButton.addEventListener("click", () => {
-			this.close();
-		});
 		
 		// Reflection prompt if wrong answers
 		if (gamification.showReflection && correct < total) {
@@ -618,6 +651,93 @@ export default class QuizSummaryModal extends Modal {
 				const diff = stats.bestScore - currentScore;
 				this.createDetailItem(currentList, "target", "Current", `${currentScore}% (${diff}% from best)`);
 			}
+		}
+	}
+
+	private async generateAndShowRecommendations(): Promise<void> {
+		if (!this.quiz || !this.userAnswers) return;
+
+		if (this.cachedRecommendations && this.cachedMissedQuestions) {
+			const cachedModal = new RecommendationsModal(
+				this.app,
+				this.settings,
+				this.plugin,
+				this.cachedRecommendations,
+				this.cachedMissedQuestions
+			);
+			cachedModal.open();
+			return;
+		}
+
+		// Collect incorrect questions
+		const incorrectQuestions: Array<{question: string, userAnswer: any, correctAnswer: any, questionType: string}> = [];
+		const missedQuestionDetails: Array<{ question: Question; userAnswer: any }> = [];
+		
+		this.results.forEach(result => {
+			if (!result.correct) {
+				const question = this.quiz![result.questionIndex];
+				const userAnswer = this.userAnswers!.get(result.questionIndex);
+				
+				// Determine question type
+				let questionType = "unknown";
+				if (isTrueFalse(question)) questionType = "True/False";
+				else if (isMultipleChoice(question)) questionType = "Multiple Choice";
+				else if (isSelectAllThatApply(question)) questionType = "Select All That Apply";
+				else if (isFillInTheBlank(question)) questionType = "Fill in the Blank";
+				else if (isMatching(question)) questionType = "Matching";
+				else if (isShortOrLongAnswer(question)) questionType = "Short Answer";
+				else questionType = "Long Answer";
+				
+				incorrectQuestions.push({
+					question: question.question,
+					userAnswer: userAnswer,
+					correctAnswer: question.answer,
+					questionType: questionType
+				});
+
+				missedQuestionDetails.push({
+					question,
+					userAnswer
+				});
+			}
+		});
+
+		if (incorrectQuestions.length === 0) {
+			new Notice("No incorrect questions found. Great job!");
+			return;
+		}
+
+		// Show loading notice
+		const loadingNotice = new Notice("Generating recommendations...", 0);
+
+		try {
+			// Generate recommendations using the configured AI model
+			const generator = GeneratorFactory.createInstance(this.settings);
+			const recommendations = await generator.generateRecommendations(incorrectQuestions);
+
+			loadingNotice.hide();
+
+			if (!recommendations) {
+				new Notice("Failed to generate recommendations. Please try again.");
+				return;
+			}
+
+			this.cachedRecommendations = recommendations;
+			this.cachedMissedQuestions = missedQuestionDetails;
+
+			// Show recommendations modal
+			const recommendationsModal = new RecommendationsModal(
+				this.app,
+				this.settings,
+				this.plugin,
+				recommendations,
+				missedQuestionDetails
+			);
+			recommendationsModal.open();
+		} catch (error) {
+			loadingNotice.hide();
+			console.error("Error generating recommendations:", error);
+			new Notice("Error generating recommendations. Please try again.");
 		}
 	}
 	

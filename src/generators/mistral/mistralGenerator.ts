@@ -103,4 +103,26 @@ export default class MistralGenerator extends Generator {
 			return null;
 		}
 	}
+
+	public async generateRecommendations(incorrectQuestions: Array<{question: string, userAnswer: any, correctAnswer: any, questionType: string}>): Promise<string | null> {
+		try {
+			const recommendationsPrompt = this.createRecommendationsPrompt(incorrectQuestions);
+
+			const response = await this.mistral.chat.complete({
+				model: this.settings.mistralTextGenModel,
+				messages: [
+					{ role: "system", content: "You are an academic tutor providing evidence-based study recommendations. Your advice should follow educational principles and learning science." },
+					{ role: "user", content: recommendationsPrompt },
+				],
+			});
+
+			if (!response.choices || !response.choices[0].message.content) {
+				return null;
+			}
+
+			return response.choices[0].message.content.trim() || null;
+		} catch (error) {
+			return handleGenerationError(error);
+		}
+	}
 }

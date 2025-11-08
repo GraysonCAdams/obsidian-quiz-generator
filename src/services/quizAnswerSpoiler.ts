@@ -340,7 +340,8 @@ export default class QuizAnswerSpoiler {
 							this.app,
 							questions,
 							this.plugin.settings,
-							this.plugin
+							this.plugin,
+							undefined
 						);
 						modal.open();
 					} else {
@@ -409,6 +410,45 @@ export default class QuizAnswerSpoiler {
 				item.createSpan({ cls: 'quiz-attempt-item-date-qg', text: formatAttemptTimestamp(attempt.timestamp) });
 				item.createSpan({ cls: 'quiz-attempt-item-score-qg', text: `${attempt.score}% (${attempt.correct}/${attempt.total})` });
 			});
+
+			// Allow scroll events to propagate to the editor when cursor is over the panel
+			// Find the scrollable container (usually .view-content or .markdown-preview-section)
+			const findScrollContainer = (element: HTMLElement | null): HTMLElement | null => {
+				if (!element) return null;
+				let current: HTMLElement | null = element;
+				while (current) {
+					// Check if this element is scrollable
+					const style = window.getComputedStyle(current);
+					const isScrollable = current.scrollHeight > current.clientHeight && 
+						(style.overflowY === 'auto' || style.overflowY === 'scroll' || style.overflow === 'auto' || style.overflow === 'scroll');
+					
+					if (isScrollable) {
+						return current;
+					}
+					// Check common Obsidian scroll containers (even if not currently scrollable, they're the scroll context)
+					if (current.classList.contains('view-content') || 
+						current.classList.contains('markdown-preview-section') ||
+						current.classList.contains('markdown-preview-view') ||
+						current.classList.contains('markdown-reading-view')) {
+						return current;
+					}
+					current = current.parentElement;
+				}
+				return null;
+			};
+
+			// Store scroll container reference for wheel handler
+			const scrollContainer = findScrollContainer(attemptsPanel);
+
+			// Handle wheel events to scroll the editor container
+			attemptsPanel.addEventListener('wheel', (e) => {
+				if (scrollContainer) {
+					// Prevent default to avoid any double scrolling
+					e.preventDefault();
+					// Manually scroll the container
+					scrollContainer.scrollTop += e.deltaY;
+				}
+			}, { passive: false });
 
 			if (expandButton && expandIcon) {
 				expandButton.addEventListener('click', () => {

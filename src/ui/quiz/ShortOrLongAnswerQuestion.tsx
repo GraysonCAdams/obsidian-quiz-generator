@@ -23,6 +23,7 @@ const ShortOrLongAnswerQuestion = ({ app, question, settings, onAnswer, onChoose
 	const [status, setStatus] = useState<"answering" | "evaluating" | "submitted">("answering");
 	const [similarityPercentage, setSimilarityPercentage] = useState<number | null>(null);
 	const [markedCorrect, setMarkedCorrect] = useState<boolean>(false);
+	const [gotItOnly, setGotItOnly] = useState<boolean>(false);
 	
 	// If already answered, set status to submitted (but allow editing in review mode)
 	useEffect(() => {
@@ -37,7 +38,7 @@ const ShortOrLongAnswerQuestion = ({ app, question, settings, onAnswer, onChoose
 	}, [answered, hideResults, onDraftChange]);
 	const component = useMemo<Component>(() => new Component(), []);
 	const questionRef = useRef<HTMLDivElement>(null);
-	const answerRef = useRef<HTMLButtonElement>(null);
+	const answerRef = useRef<HTMLDivElement>(null);
 	const repeatButtonRef = useRef<HTMLAnchorElement | null>(null);
 
 	useEffect(() => {
@@ -89,6 +90,11 @@ const ShortOrLongAnswerQuestion = ({ app, question, settings, onAnswer, onChoose
 	}, [app, question, component, showRepeat, onRepeat]);
 
 	useEffect(() => {
+		setMarkedCorrect(false);
+		setGotItOnly(false);
+	}, [question]);
+
+	useEffect(() => {
 		if (answerRef.current && status === "submitted" && !hideResults) {
 			MarkdownRenderer.render(app, question.answer, answerRef.current, "", component);
 		}
@@ -108,8 +114,8 @@ const ShortOrLongAnswerQuestion = ({ app, question, settings, onAnswer, onChoose
 		// If empty (normal mode)
 		if (!input.trim()) {
 			setStatus("submitted");
-			setSimilarityPercentage(0);
-			new Notice("Incorrect: 0% match");
+				setSimilarityPercentage(0);
+				new Notice("Incorrect: 0% match");
 			onAnswer?.(false, "");
 			onDraftChange?.("");
 			return;
@@ -140,6 +146,7 @@ const ShortOrLongAnswerQuestion = ({ app, question, settings, onAnswer, onChoose
 
 	const handleMarkCorrect = useCallback(() => {
 		setMarkedCorrect(true);
+		setGotItOnly(false);
 		new Notice("Marked as correct");
 		// Override the answer result to correct
 		onAnswer?.(true);
@@ -152,15 +159,28 @@ const ShortOrLongAnswerQuestion = ({ app, question, settings, onAnswer, onChoose
 		}, 3000);
 	}, [onAnswer]);
 
+	const handleGotIt = useCallback(() => {
+		setGotItOnly(true);
+		setMarkedCorrect(false);
+		onAnswer?.(false);
+		
+		// Auto-progress to next question after 3 seconds
+		setTimeout(() => {
+			// Trigger a custom event that the parent can listen to for auto-progression
+			const event = new CustomEvent('quiz-auto-progress');
+			window.dispatchEvent(event);
+		}, 3000);
+	}, [onAnswer]);
+
 	const isIncorrect = status === "submitted" && similarityPercentage !== null && similarityPercentage < 70;
 	const isCorrect = status === "submitted" && similarityPercentage !== null && similarityPercentage >= 70;
 	const showOverride = isIncorrect && !markedCorrect;
-	const showGotIt = (isCorrect || isIncorrect) && !markedCorrect;
+	const showGotIt = (isCorrect || isIncorrect) && !markedCorrect && !gotItOnly;
 
 	return (
 		<div className="question-container-qg">
 			<div className="question-qg" ref={questionRef} />
-			{status === "submitted" && !hideResults && <button className="answer-qg" ref={answerRef} />}
+			{status === "submitted" && !hideResults && <div className="answer-qg" ref={answerRef} />}
 			{!hideResults && (showOverride || showGotIt) && (
 				<div className="override-container-qg">
 					{showOverride && (
@@ -169,7 +189,7 @@ const ShortOrLongAnswerQuestion = ({ app, question, settings, onAnswer, onChoose
 						</button>
 					)}
 					{showGotIt && (
-						<button className="override-button-qg override-button-green-qg" onClick={handleMarkCorrect}>
+						<button className="override-button-qg override-button-green-qg" onClick={handleGotIt}>
 							Got it!
 						</button>
 					)}
@@ -180,7 +200,8 @@ const ShortOrLongAnswerQuestion = ({ app, question, settings, onAnswer, onChoose
 					✓ Marked as correct
 				</div>
 			)}
-			<div className={status === "submitted" ? "input-container-qg" : "input-container-qg limit-height-qg"}>
+			{!(status === "submitted" && !hideResults) && (
+				<div className={status === "submitted" ? "input-container-qg" : "input-container-qg limit-height-qg"}>
 				<AnswerInput
 					onSubmit={handleSubmit}
 					clearInputOnSubmit={false}
@@ -197,7 +218,8 @@ const ShortOrLongAnswerQuestion = ({ app, question, settings, onAnswer, onChoose
 				<div className="instruction-footnote-qg">
 					Press enter to submit your answer. Press enter without typing to mark as incorrect and reveal the answer.
 				</div>
-			</div>
+				</div>
+			)}
 		</div>
 	);
 };

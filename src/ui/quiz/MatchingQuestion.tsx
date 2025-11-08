@@ -13,6 +13,8 @@ interface MatchingQuestionProps {
 	showRepeat?: boolean;
 	hideResults?: boolean;
 	savedUserAnswer?: any;
+	onDraftChange?: (pairs: { leftOption: string, rightOption: string }[]) => void;
+	savedDraftPairs?: { leftOption: string, rightOption: string }[];
 }
 
 interface Point {
@@ -20,7 +22,7 @@ interface Point {
 	y: number;
 }
 
-const MatchingQuestion = ({ app, question, onAnswer, onChoose, answered = false, onRepeat, showRepeat = false, hideResults = false, savedUserAnswer }: MatchingQuestionProps) => {
+const MatchingQuestion = ({ app, question, onAnswer, onChoose, answered = false, onRepeat, showRepeat = false, hideResults = false, savedUserAnswer, onDraftChange, savedDraftPairs }: MatchingQuestionProps) => {
 	const [selectedPairs, setSelectedPairs] = useState<{ leftIndex: number, rightIndex: number }[]>([]);
 	const [status, setStatus] = useState<"answering" | "submitted" | "reviewing">("answering");
 	const [focusedSide, setFocusedSide] = useState<"left" | "right" | null>(null);
@@ -54,13 +56,18 @@ const MatchingQuestion = ({ app, question, onAnswer, onChoose, answered = false,
 		[question]
 	);
 	
-	// Update selectedPairs when savedUserAnswer changes (e.g., when navigating back to question)
+	// Update selectedPairs when savedUserAnswer or savedDraftPairs changes (e.g., when navigating back to question)
 	useEffect(() => {
-		if (savedUserAnswer && Array.isArray(savedUserAnswer)) {
-			const leftIndexMap = new Map<string, number>(leftOptions.map((option, index) => [option.value, index]));
-			const rightIndexMap = new Map<string, number>(rightOptions.map((option, index) => [option.value, index]));
-			
-			const restoredPairs = savedUserAnswer
+		const leftIndexMap = new Map<string, number>(leftOptions.map((option, index) => [option.value, index]));
+		const rightIndexMap = new Map<string, number>(rightOptions.map((option, index) => [option.value, index]));
+		
+		// Priority: savedUserAnswer (complete answer) > savedDraftPairs (incomplete draft) > empty
+		const pairsToRestore = savedUserAnswer && Array.isArray(savedUserAnswer) 
+			? savedUserAnswer 
+			: (savedDraftPairs && Array.isArray(savedDraftPairs) ? savedDraftPairs : null);
+		
+		if (pairsToRestore) {
+			const restoredPairs = pairsToRestore
 				.map((pair: { leftOption: string, rightOption: string }) => {
 					const leftIndex = leftIndexMap.get(pair.leftOption);
 					const rightIndex = rightIndexMap.get(pair.rightOption);
@@ -72,11 +79,11 @@ const MatchingQuestion = ({ app, question, onAnswer, onChoose, answered = false,
 				.filter((pair): pair is { leftIndex: number, rightIndex: number } => pair !== null);
 			
 			setSelectedPairs(restoredPairs);
-		} else if (!savedUserAnswer) {
-			// Reset if no saved answer
+		} else {
+			// Reset if no saved answer or draft
 			setSelectedPairs([]);
 		}
-	}, [savedUserAnswer, leftOptions, rightOptions]);
+	}, [savedUserAnswer, savedDraftPairs, leftOptions, rightOptions]);
 	const correctPairsMap = useMemo<Map<number, number>>(() => {
 		const leftIndexMap = new Map<string, number>(leftOptions.map((option, index) => [option.value, index]));
 		const rightIndexMap = new Map<string, number>(rightOptions.map((option, index) => [option.value, index]));
@@ -618,6 +625,17 @@ const MatchingQuestion = ({ app, question, onAnswer, onChoose, answered = false,
 		return () => document.removeEventListener('keydown', handleKeyDown);
 	}, [focusedSide, focusedIndex, status, question.answer.length, pendingSelection, selectedPairs]);
 
+	// Save draft pairs whenever selectedPairs changes (if incomplete)
+	useEffect(() => {
+		if (onDraftChange && hideResults && status === "answering" && selectedPairs.length > 0 && selectedPairs.length < question.answer.length) {
+			const userAnswerPairs = selectedPairs.map(pair => ({
+				leftOption: leftOptions[pair.leftIndex]?.value || "",
+				rightOption: rightOptions[pair.rightIndex]?.value || ""
+			}));
+			onDraftChange(userAnswerPairs);
+		}
+	}, [hideResults, status, selectedPairs, leftOptions, rightOptions, onDraftChange, question.answer.length]);
+
 	// Auto-submit when all pairs are selected in review-at-end mode (but allow editing)
 	useEffect(() => {
 		if (hideResults && status === "answering" && selectedPairs.length === question.answer.length && !autoSubmittedRef.current) {
@@ -628,11 +646,15 @@ const MatchingQuestion = ({ app, question, onAnswer, onChoose, answered = false,
 				rightOption: rightOptions[pair.rightIndex]?.value || ""
 			}));
 			onAnswer?.(false, userAnswerPairs); // Pass false for correct, will be calculated later
+			// Clear draft when submitting complete answer
+			if (onDraftChange) {
+				onDraftChange([]);
+			}
 			setStatus("submitted");
 			setFocusedSide(null);
 			setFocusedIndex(null);
 		}
-	}, [hideResults, status, selectedPairs.length, question.answer.length, selectedPairs, correctPairsMap, leftOptions, rightOptions, onAnswer]);
+	}, [hideResults, status, selectedPairs.length, question.answer.length, selectedPairs, correctPairsMap, leftOptions, rightOptions, onAnswer, onDraftChange]);
 	
 	// Reset focus when question changes
 	useEffect(() => {

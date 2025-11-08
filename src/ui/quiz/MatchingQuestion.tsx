@@ -1,7 +1,8 @@
-import { App, Component, MarkdownRenderer, setIcon } from "obsidian";
+import { App, Component, MarkdownRenderer } from "obsidian";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Matching } from "../../utils/types";
 import { shuffleArray } from "../../utils/helpers";
+import { useQuestionMarkdown } from "../hooks/useQuestionMarkdown";
 
 interface MatchingQuestionProps {
 	app: App;
@@ -96,56 +97,16 @@ const MatchingQuestion = ({ app, question, onAnswer, onChoose, answered = false,
 		}, new Map<number, number>());
 	}, [question, leftOptions, rightOptions]);
 
-	const questionRef = useRef<HTMLDivElement>(null);
-	const repeatButtonRef = useRef<HTMLAnchorElement | null>(null);
+	const questionRef = useQuestionMarkdown({
+		app,
+		question: question.question,
+		showRepeat,
+		onRepeat,
+	});
 
 	useEffect(() => {
 		const component = new Component();
-		
-		// Clear previous content
-		if (questionRef.current) {
-			questionRef.current.empty();
-		}
 
-		question.question.split("\\n").forEach(questionFragment => {
-			if (questionRef.current) {
-				MarkdownRenderer.render(app, questionFragment, questionRef.current, "", component);
-			}
-		});
-		
-		// Insert repeat button inline with question text if enabled
-		if (questionRef.current && showRepeat && onRepeat) {
-			const existingRepeat = questionRef.current.querySelector('.quiz-repeat-question-link-qg');
-			if (existingRepeat) {
-				existingRepeat.remove();
-			}
-			
-			const repeatLink = document.createElement('a');
-			repeatLink.className = 'quiz-repeat-question-link-qg';
-			repeatLink.href = '#';
-			repeatLink.title = 'Repeat question';
-			repeatLink.addEventListener('click', (e) => {
-				e.preventDefault();
-				onRepeat();
-			});
-			repeatButtonRef.current = repeatLink;
-			setIcon(repeatLink, 'repeat');
-			
-			// Find the first paragraph or text element and insert inline
-			const firstParagraph = questionRef.current.querySelector('p');
-			if (firstParagraph) {
-				firstParagraph.appendChild(repeatLink);
-			} else {
-				const firstElement = questionRef.current.firstElementChild || questionRef.current.firstChild;
-				if (firstElement && firstElement instanceof HTMLElement) {
-					firstElement.appendChild(repeatLink);
-				} else {
-					questionRef.current.appendChild(repeatLink);
-				}
-			}
-		}
-
-		// Render button content
 		leftButtonRefs.current.forEach((button, index) => {
 			if (button && index < leftOptions.length) {
 				button.empty();
@@ -158,7 +119,11 @@ const MatchingQuestion = ({ app, question, onAnswer, onChoose, answered = false,
 				MarkdownRenderer.render(app, rightOptions[index].value, button, "", component);
 			}
 		});
-	}, [app, question, leftOptions, rightOptions, showRepeat, onRepeat]);
+
+		return () => {
+			component.unload();
+		};
+	}, [app, leftOptions, rightOptions]);
 
 	// Get button edge position (for line connections)
 	const getButtonEdge = (side: "left" | "right", index: number): Point | null => {

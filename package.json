@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-quiz-generator",
-	"version": "2.4.4",
+	"version": "2.4.5",
 	"description": "Generate interactive exam-style quizzes from your notes using AI models (OpenAI, Google, Anthropic, Ollama, and more). Features gamification, conversation mode, text-to-speech, and comprehensive quiz tracking. Create multiple question types or manually build your own quizzes.",
 	"main": "main.js",
 	"scripts": {

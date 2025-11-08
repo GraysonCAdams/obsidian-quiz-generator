@@ -35,20 +35,10 @@ export default class QuizSaver {
 	public async saveQuestion(question: Question): Promise<void> {
 		const saveFile = await this.getSaveFile();
 		const questionBlock = this.createCalloutQuestion(question);
-		const existingContent = await this.app.vault.read(saveFile);
-		const frontmatterInfo = getFrontMatterInfo(existingContent);
-		const body = frontmatterInfo.exists
-			? existingContent.slice(frontmatterInfo.contentStart)
-			: existingContent;
-		const hasBodyContent = body.trim().length > 0;
+		const { hasBodyContent, prefix } = await this.readSaveFileState(saveFile);
+		const descriptionBlock = this.generateDescriptionBlock([question]);
 
 		if (!hasBodyContent) {
-			const descriptionLine = this.generateQuizDescription([question]);
-			const descriptionBlock = descriptionLine ? `${descriptionLine}\n\n` : "";
-			let prefix = existingContent;
-			if (prefix.length > 0 && !prefix.endsWith("\n")) {
-				prefix += "\n";
-			}
 			await this.app.vault.modify(saveFile, `${prefix}${descriptionBlock}${questionBlock}`);
 		} else {
 			await this.app.vault.append(saveFile, questionBlock);
@@ -68,26 +58,14 @@ export default class QuizSaver {
 		for (const question of questions) {
 			quiz.push(this.createCalloutQuestion(question));
 		}
-		const descriptionLine = this.generateQuizDescription(questions);
-		const descriptionBlock = descriptionLine ? `${descriptionLine}\n\n` : "";
+		const descriptionBlock = this.generateDescriptionBlock(questions);
 
 		// Get save file (this will ensure contentSelectionMode is in frontmatter if provided)
 		const saveFile = await this.getSaveFile();
-		
-		// If file already exists and has content, we need to append, otherwise create with content
-		const existingContent = await this.app.vault.read(saveFile);
-		const frontmatterInfo = getFrontMatterInfo(existingContent);
-		const body = frontmatterInfo.exists
-			? existingContent.slice(frontmatterInfo.contentStart)
-			: existingContent;
-		const hasBodyContent = body.trim().length > 0;
+		const { prefix, hasBodyContent } = await this.readSaveFileState(saveFile);
 		const quizContent = quiz.join("");
 
 		if (!hasBodyContent) {
-			let prefix = existingContent;
-			if (prefix.length > 0 && !prefix.endsWith("\n")) {
-				prefix += "\n";
-			}
 			await this.app.vault.modify(saveFile, `${prefix}${descriptionBlock}${quizContent}`);
 		} else {
 			await this.app.vault.append(saveFile, quizContent);
@@ -455,6 +433,32 @@ export default class QuizSaver {
 			? `---\n${sourcesProperty}${contentModeProperty}---\n`
 			: "";
 		return await this.app.vault.create(this.saveFilePath, initialContent);
+	}
+
+	private async readSaveFileState(file: TFile): Promise<{
+		existingContent: string;
+		frontmatterInfo: ReturnType<typeof getFrontMatterInfo>;
+		hasBodyContent: boolean;
+		prefix: string;
+	}> {
+		const existingContent = await this.app.vault.read(file);
+		const frontmatterInfo = getFrontMatterInfo(existingContent);
+		const body = frontmatterInfo.exists
+			? existingContent.slice(frontmatterInfo.contentStart)
+			: existingContent;
+		const hasBodyContent = body.trim().length > 0;
+
+		let prefix = existingContent;
+		if (prefix.length > 0 && !prefix.endsWith("\n")) {
+			prefix += "\n";
+		}
+
+		return { existingContent, frontmatterInfo, hasBodyContent, prefix };
+	}
+
+	private generateDescriptionBlock(questions: Question[]): string {
+		const descriptionLine = this.generateQuizDescription(questions);
+		return descriptionLine ? `${descriptionLine}\n\n` : "";
 	}
 
 	private generateQuizDescription(questions: Question[]): string | null {

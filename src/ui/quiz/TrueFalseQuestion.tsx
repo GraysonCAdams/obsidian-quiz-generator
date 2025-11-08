@@ -1,6 +1,7 @@
-import { App, Component, MarkdownRenderer, setIcon } from "obsidian";
+import { App } from "obsidian";
 import { useEffect, useRef, useState } from "react";
 import { TrueFalse } from "../../utils/types";
+import { useQuestionMarkdown } from "../hooks/useQuestionMarkdown";
 
 interface TrueFalseQuestionProps {
 	app: App;
@@ -24,62 +25,15 @@ const TrueFalseQuestion = ({ app, question, onAnswer, onChoose, answered = false
 			setUserAnswer(savedUserAnswer);
 		}
 	}, [savedUserAnswer]);
-	const questionRef = useRef<HTMLDivElement>(null);
-	const repeatButtonRef = useRef<HTMLAnchorElement | null>(null);
+	const questionRef = useQuestionMarkdown({
+		app,
+		question: question.question,
+		showRepeat,
+		onRepeat,
+	});
 	const containerRef = useRef<HTMLDivElement>(null);
 	const trueButtonRef = useRef<HTMLButtonElement>(null);
 	const falseButtonRef = useRef<HTMLButtonElement>(null);
-
-	useEffect(() => {
-		const component = new Component();
-		
-		// Clear previous content
-		if (questionRef.current) {
-			questionRef.current.empty();
-		}
-
-		question.question.split("\\n").forEach(questionFragment => {
-			if (questionRef.current) {
-				MarkdownRenderer.render(app, questionFragment, questionRef.current, "", component);
-			}
-		});
-		
-		// Insert repeat button inline with question text if enabled
-		if (questionRef.current && showRepeat && onRepeat) {
-			// Remove existing repeat button if any
-			const existingRepeat = questionRef.current.querySelector('.quiz-repeat-question-link-qg');
-			if (existingRepeat) {
-				existingRepeat.remove();
-			}
-			
-			const repeatLink = document.createElement('a');
-			repeatLink.className = 'quiz-repeat-question-link-qg';
-			repeatLink.href = '#';
-			repeatLink.title = 'Repeat question';
-			repeatLink.addEventListener('click', (e) => {
-				e.preventDefault();
-				onRepeat();
-			});
-			repeatButtonRef.current = repeatLink;
-			setIcon(repeatLink, 'repeat');
-			
-			// Find the first paragraph or text element and insert inline
-			const firstParagraph = questionRef.current.querySelector('p');
-			if (firstParagraph) {
-				// Insert after the paragraph's content, but still within the paragraph
-				firstParagraph.appendChild(repeatLink);
-			} else {
-				// Fallback: find first text node or element and append inline
-				const firstElement = questionRef.current.firstElementChild || questionRef.current.firstChild;
-				if (firstElement && firstElement instanceof HTMLElement) {
-					firstElement.appendChild(repeatLink);
-				} else {
-					// Last resort: append to container
-					questionRef.current.appendChild(repeatLink);
-				}
-			}
-		}
-	}, [app, question, showRepeat, onRepeat]);
 
 	const getButtonClass = (buttonAnswer: boolean) => {
 		let baseClass = "true-false-button-qg";

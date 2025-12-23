@@ -44,7 +44,7 @@
 		"cohere-ai": "^7.14.0",
 		"diff-match-patch": "^1.0.5",
 		"jszip": "^3.10.1",
-		"langchain": "^0.3.5",
+		"langchain": "^0.3.37",
 		"localforage": "^1.10.0",
 		"ollama": "^0.5.9",
 		"openai": "^4.68.4",

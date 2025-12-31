@@ -41,7 +41,7 @@
 		"@langchain/ollama": "^0.1.0",
 		"@langchain/openai": "^0.3.11",
 		"@mistralai/mistralai": "^1.1.0",
-		"cohere-ai": "^7.14.0",
+		"cohere-ai": "^7.20.0",
 		"diff-match-patch": "^1.0.5",
 		"jszip": "^3.10.1",
 		"langchain": "^0.3.5",
